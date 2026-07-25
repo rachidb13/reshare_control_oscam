@@ -1,0 +1,19 @@
+{
+  "oscam": {
+    "userstats": {
+      "user": [
+        {
+          "name": "golf",
+          "usermd5": "d2c24d59e0baff4d0155fbdf62590867",
+          "disabled": "0",
+          "status": "online",
+          "ip": "10.0.0.17",
+          "protocol": "cccam",
+          "cwok": "88",
+          "cwnok": "0",
+          "total_ecm_min": "n/a"
+        }
+      ]
+    }
+  }
+}

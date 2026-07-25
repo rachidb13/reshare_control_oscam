@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<status>
+  <client type="c">
+    <name>alpha</name>
+    <times>
+      <idle>12</idle>
+    </times>
+  </client>
+  <client type="c">
+    <name>bravo</name>
+    <times>
+      <idle>0</idle>
+    </times>
+  </client>
+</status>

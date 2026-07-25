@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oscam-reshare-control"
+version = "0.1.0"
+description = "OSCAM WebIF ECM/min monitoring and reshare control"
+requires-python = ">=3.8"
+
+[project.scripts]
+reshare-control = "reshare_control.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

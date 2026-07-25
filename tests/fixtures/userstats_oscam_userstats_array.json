@@ -1,0 +1,30 @@
+{
+  "oscam": {
+    "userstats": {
+      "user": [
+        {
+          "name": "alpha",
+          "usermd5": "2c1743a391305fbf367df8e4f069f9f9",
+          "disabled": "0",
+          "status": "online",
+          "ip": "10.0.0.11",
+          "protocol": "cccam",
+          "cwok": "120",
+          "cwnok": "0",
+          "total_ecm_min": "24"
+        },
+        {
+          "username": "bravo",
+          "usermd5": "fd9ab41e47a9ef4f6477a8a000bf404f",
+          "disabled": "0",
+          "status": "online",
+          "ip": "10.0.0.12",
+          "protocol": "newcamd",
+          "cwok": "60",
+          "cwnok": "1",
+          "total_ecm_min": "8"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# Local runtime config/state (never commit secrets)
+/etc/reshare-control/
+config.json
+state.json
+*.local

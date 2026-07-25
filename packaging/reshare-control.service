@@ -1,0 +1,13 @@
+[Unit]
+Description=OSCAM Reshare Control poll cycle
+Documentation=README.md
+
+[Service]
+Type=oneshot
+# Installed by install.sh into /etc/systemd/system by default. The installer
+# rewrites --config-dir when RC_CONFIG_DIR selects a different config path.
+ExecStart=/usr/bin/env reshare-control --config-dir /etc/reshare-control run
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

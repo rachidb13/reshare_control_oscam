@@ -1,0 +1,17 @@
+{
+  "oscam": {
+    "userstats": {
+      "user": {
+        "name": "delta",
+        "usermd5": "63bcabf86a9a991864777c631c5b7617",
+        "disabled": "0",
+        "status": "online",
+        "ip": "10.0.0.14",
+        "protocol": "cccam",
+        "cwok": "12",
+        "cwnok": "0",
+        "total_ecm_min": "5"
+      }
+    }
+  }
+}

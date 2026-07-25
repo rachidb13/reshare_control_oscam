@@ -1,0 +1,18 @@
+{
+  "oscam": {
+    "userstats": {
+      "user": [
+        {
+          "name": "foxtrot",
+          "usermd5": "5d8b1241a38d8a4ac4e3a1bde73880d5",
+          "disabled": "0",
+          "status": "online",
+          "ip": "10.0.0.16",
+          "protocol": "cccam",
+          "cwok": "88",
+          "cwnok": "0"
+        }
+      ]
+    }
+  }
+}

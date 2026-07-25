@@ -1,0 +1,19 @@
+{
+  "oscam": {
+    "users": [
+      {
+        "user": {
+          "name": "charlie",
+          "usermd5": "bf779e0933a882808585d19455cd7937",
+          "disabled": "0",
+          "status": "online",
+          "ip": "10.0.0.13",
+          "protocol": "cccam",
+          "cwok": "42",
+          "cwnok": "0",
+          "total_ecm_min": "21"
+        }
+      }
+    ]
+  }
+}
