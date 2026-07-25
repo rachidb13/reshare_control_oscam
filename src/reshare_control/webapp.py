@@ -1,0 +1,365 @@
+"""Small standard-library web UI for managing local OSCam instances."""
+
+from __future__ import print_function
+
+import base64
+import html
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from .config import (
+    AppConfig,
+    ConfigError,
+    InstanceConfig,
+    instance_state_dir,
+    load_app_config,
+    sanitize_instance_id,
+    save_app_config,
+    verify_password,
+)
+from .enforce import enable_account, stop_account
+from .poller import run_cycle
+from .state import StateStore, UserStrikeState
+from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
+
+
+def serve(config_dir, bind_host=None, port=None):
+    app = load_app_config(config_dir)
+    host = bind_host or app.web.bind_host
+    listen_port = int(port or app.web.port)
+
+    class Handler(ReshareControlHandler):
+        app_config_dir = config_dir
+
+    server = ThreadingHTTPServer((host, listen_port), Handler)
+    print("reshare-control web listening on http://%s:%s" % (host, listen_port))
+    server.serve_forever()
+
+
+class ReshareControlHandler(BaseHTTPRequestHandler):
+    app_config_dir = "/etc/reshare-control"
+
+    def do_GET(self):
+        if not self._authorized():
+            return self._require_auth()
+        parsed = urlparse(self.path)
+        if parsed.path in ("", "/"):
+            return self._render_index()
+        if parsed.path.startswith("/instance/"):
+            return self._render_instance(parsed.path.rsplit("/", 1)[-1])
+        self._send_html("Not found", status=404)
+
+    def do_POST(self):
+        if not self._authorized():
+            return self._require_auth()
+        parsed = urlparse(self.path)
+        form = self._read_form()
+        try:
+            if parsed.path == "/instances/save":
+                self._save_instance(form)
+                return self._redirect("/")
+            if parsed.path == "/instances/delete":
+                self._delete_instance(form)
+                return self._redirect("/")
+            if parsed.path == "/instances/run":
+                return self._run_instance(form)
+            if parsed.path == "/users/disable":
+                return self._disable_user(form)
+            if parsed.path == "/users/enable":
+                return self._enable_user(form)
+            if parsed.path == "/users/exempt":
+                return self._set_exempt(form, True)
+            if parsed.path == "/users/unexempt":
+                return self._set_exempt(form, False)
+        except Exception as exc:
+            return self._send_html(_page("Error", "<p class='error'>%s</p><p><a href='/'>Back</a></p>" % _e(exc)), status=500)
+        self._send_html("Not found", status=404)
+
+    def log_message(self, fmt, *args):
+        return
+
+    def _authorized(self):
+        app = load_app_config(self.app_config_dir)
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Basic "):
+            return False
+        try:
+            decoded = base64.b64decode(header.split(" ", 1)[1]).decode("utf-8")
+        except Exception:
+            return False
+        user, sep, password = decoded.partition(":")
+        return (
+            sep == ":"
+            and user == app.web.admin_user
+            and verify_password(password, app.web.admin_password_hash)
+        )
+
+    def _require_auth(self):
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="OSCAM Reshare Control"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"authentication required\n")
+
+    def _render_index(self):
+        app = load_app_config(self.app_config_dir)
+        rows = []
+        for instance in app.instances:
+            state = StateStore(instance_state_dir(self.app_config_dir, instance.id)).load()
+            flagged = sum(1 for item in state.users.values() if item.status == "flagged")
+            stopped = sum(1 for item in state.users.values() if item.status == "stopped")
+            rows.append("""
+            <tr>
+              <td><a href="/instance/%s">%s</a><span>%s:%s</span></td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td class="actions">
+                <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Run</button></form>
+                <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
+              </td>
+            </tr>
+            """ % (
+                _e(instance.id), _e(instance.name), _e(instance.host), instance.port,
+                instance.max_ecm_per_min, instance.strike_count,
+                "on" if instance.auto_stop_enabled else "off",
+                "%s / %s" % (flagged, stopped),
+                _e(instance.id), _e(instance.id),
+            ))
+        body = """
+        <section class="toolbar">
+          <h1>OSCAM Reshare Control</h1>
+          <p>Manage OSCam instances running on this VPS.</p>
+        </section>
+        <section>
+          <h2>Instances</h2>
+          <table>
+            <thead><tr><th>Name</th><th>ECM/min</th><th>Strikes</th><th>Auto-stop</th><th>Flagged / stopped</th><th></th></tr></thead>
+            <tbody>%s</tbody>
+          </table>
+        </section>
+        %s
+        """ % ("".join(rows) or "<tr><td colspan='6'>No OSCam instances configured yet.</td></tr>",
+               _instance_form())
+        self._send_html(_page("OSCAM Reshare Control", body))
+
+    def _render_instance(self, instance_id):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(instance_id))
+        store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
+        state = store.load()
+        rows = []
+        for username, user_state in sorted(state.users.items()):
+            rows.append("""
+            <tr>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td class="actions">
+                <form method="post" action="/users/disable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button class="danger">Disable</button></form>
+                <form method="post" action="/users/enable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>Enable</button></form>
+                %s
+              </td>
+            </tr>
+            """ % (
+                _e(username),
+                _e(user_state.last_observed_ecm_min if user_state.last_observed_ecm_min is not None else "NO_READING"),
+                user_state.consecutive_strikes,
+                _e(user_state.status),
+                "yes" if user_state.exempt else "no",
+                _e(instance.id), _e(username), _e(instance.id), _e(username),
+                _exempt_button(instance, username, user_state.exempt),
+            ))
+        body = """
+        <section class="toolbar">
+          <div><a href="/">Back</a><h1>%s</h1><p>%s:%s · %s</p></div>
+          <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Run now</button></form>
+        </section>
+        <section>
+          <h2>Users</h2>
+          <table>
+            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Exempt</th><th></th></tr></thead>
+            <tbody>%s</tbody>
+          </table>
+        </section>
+        %s
+        """ % (
+            _e(instance.name), _e(instance.host), instance.port, _e(instance.base_path),
+            _e(instance.id),
+            "".join(rows) or "<tr><td colspan='6'>No state yet. Run this instance once.</td></tr>",
+            _instance_form(instance),
+        )
+        self._send_html(_page(instance.name, body))
+
+    def _save_instance(self, form):
+        app = load_app_config(self.app_config_dir)
+        name = _first(form, "name")
+        instance_id = sanitize_instance_id(_first(form, "id") or name)
+        instance = InstanceConfig(
+            id=instance_id,
+            name=name,
+            host=_first(form, "host"),
+            port=_first(form, "port"),
+            webif_user=_first(form, "webif_user"),
+            webif_pass=_first(form, "webif_pass"),
+            base_path=_first(form, "base_path") or "/usr/local/etc",
+            max_ecm_per_min=_first(form, "max_ecm_per_min") or 20,
+            strike_count=_first(form, "strike_count") or 3,
+            auto_stop_enabled=_first(form, "auto_stop_enabled") == "1",
+            poll_interval_min=_first(form, "poll_interval_min") or 5,
+            request_timeout_s=_first(form, "request_timeout_s") or 5,
+            exempt_users=_split_lines(_first(form, "exempt_users")),
+        )
+        app.upsert_instance(instance)
+        save_app_config(app, self.app_config_dir)
+
+    def _delete_instance(self, form):
+        app = load_app_config(self.app_config_dir)
+        app.remove_instance(sanitize_instance_id(_first(form, "id")))
+        save_app_config(app, self.app_config_dir)
+
+    def _run_instance(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        result = run_cycle(instance, StateStore(instance_state_dir(self.app_config_dir, instance.id)))
+        return self._send_html(_page("Run complete", """
+        <p>Fetch status: %s</p>
+        <p>Stopped users: %s</p>
+        <p><a href="/instance/%s">Back to instance</a></p>
+        """ % (_e(result.fetch_status), _e(", ".join(result.stopped_users) or "none"), _e(instance.id))))
+
+    def _disable_user(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        username = _first(form, "user")
+        store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
+        with store.locked():
+            state = store.load()
+            user_state = state.get_user(username) or UserStrikeState()
+            stop_account(instance, store.config_dir, username, user_state,
+                         user_state.last_observed_ecm_min)
+            state.set_user(username, user_state)
+            store.save(state)
+        return self._redirect("/instance/%s" % instance.id)
+
+    def _enable_user(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
+        enable_account(instance, store.config_dir, _first(form, "user"), store)
+        return self._redirect("/instance/%s" % instance.id)
+
+    def _set_exempt(self, form, exempt):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        username = _first(form, "user")
+        users = set(instance.exempt_users)
+        if exempt:
+            users.add(username)
+        else:
+            users.discard(username)
+        instance.exempt_users = sorted(users)
+        app.upsert_instance(instance)
+        save_app_config(app, self.app_config_dir)
+        return self._redirect("/instance/%s" % instance.id)
+
+    def _read_form(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        data = self.rfile.read(length).decode("utf-8") if length else ""
+        return parse_qs(data)
+
+    def _send_html(self, body, status=200):
+        payload = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _redirect(self, location):
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.end_headers()
+
+
+def _instance_form(instance=None):
+    instance = instance or _EmptyInstance()
+    return """
+    <section>
+      <h2>%s</h2>
+      <form method="post" action="/instances/save" class="grid">
+        <input type="hidden" name="id" value="%s">
+        <label>Name<input name="name" required value="%s"></label>
+        <label>WebIF host<input name="host" required value="%s"></label>
+        <label>WebIF port<input name="port" type="number" min="1" max="65535" required value="%s"></label>
+        <label>WebIF user<input name="webif_user" value="%s"></label>
+        <label>WebIF password<input name="webif_pass" type="password" value="%s"></label>
+        <label>OSCam config path<input name="base_path" required value="%s"></label>
+        <label>Max ECM/min<input name="max_ecm_per_min" type="number" step="0.1" min="0.1" value="%s"></label>
+        <label>Strike count<input name="strike_count" type="number" min="1" value="%s"></label>
+        <label>Poll minutes<input name="poll_interval_min" type="number" min="1" value="%s"></label>
+        <label>Timeout seconds<input name="request_timeout_s" type="number" min="1" value="%s"></label>
+        <label class="check"><input name="auto_stop_enabled" type="checkbox" value="1" %s> Auto-stop</label>
+        <label class="wide">Exempt users<textarea name="exempt_users">%s</textarea></label>
+        <button>Save OSCam</button>
+      </form>
+    </section>
+    """ % (
+        "Edit OSCam" if instance.id else "Add OSCam",
+        _e(instance.id), _e(instance.name), _e(instance.host), instance.port,
+        _e(instance.webif_user), _e(instance.webif_pass), _e(instance.base_path),
+        instance.max_ecm_per_min, instance.strike_count, instance.poll_interval_min,
+        instance.request_timeout_s, "checked" if instance.auto_stop_enabled else "",
+        _e("\n".join(instance.exempt_users)),
+    )
+
+
+def _exempt_button(instance, username, exempt):
+    action = "/users/unexempt" if exempt else "/users/exempt"
+    label = "Unexempt" if exempt else "Exempt"
+    return '<form method="post" action="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>%s</button></form>' % (
+        action, _e(instance.id), _e(username), label)
+
+
+class _EmptyInstance(object):
+    id = ""
+    name = ""
+    host = "127.0.0.1"
+    port = 8888
+    webif_user = ""
+    webif_pass = ""
+    base_path = "/usr/local/etc"
+    max_ecm_per_min = 20
+    strike_count = 3
+    poll_interval_min = 5
+    request_timeout_s = 5
+    auto_stop_enabled = False
+    exempt_users = []
+
+
+def _page(title, body):
+    return """<!doctype html>
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>%s</title><style>
+    body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#f7f8fa;color:#16181d}
+    section{max-width:1180px;margin:0 auto;padding:22px} h1{margin:0 0 4px;font-size:30px} h2{font-size:19px}
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fff;border-bottom:1px solid #dde1e7;max-width:none}
+    table{width:100%%;border-collapse:collapse;background:#fff;border:1px solid #dde1e7} th,td{text-align:left;padding:10px;border-bottom:1px solid #e8ebef;vertical-align:top}
+    td span{display:block;color:#667085;font-size:13px;margin-top:3px}.actions{display:flex;gap:6px;flex-wrap:wrap}
+    form{margin:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;background:#fff;border:1px solid #dde1e7;padding:16px}
+    label{display:flex;flex-direction:column;font-size:13px;font-weight:650;gap:5px}.check{flex-direction:row;align-items:center;margin-top:22px}
+    input,textarea{font:inherit;padding:9px;border:1px solid #b9c0cb;border-radius:6px}textarea{min-height:72px}.wide{grid-column:1/-1}
+    button{font:inherit;font-weight:700;padding:8px 12px;border:1px solid #9aa3af;border-radius:6px;background:#fff;cursor:pointer}.danger{border-color:#c2410c;color:#9a3412}
+    a{color:#0f5fb8;text-decoration:none}.error{color:#b42318;background:#fff0f0;border:1px solid #f4b4b4;padding:12px}
+    </style></head><body>%s</body></html>""" % (_e(title), body)
+
+
+def _first(form, key):
+    values = form.get(key, [""])
+    return values[0].strip() if values else ""
+
+
+def _split_lines(value):
+    return [line.strip() for line in (value or "").splitlines() if line.strip()]
+
+
+def _e(value):
+    return html.escape(str(value), quote=True)

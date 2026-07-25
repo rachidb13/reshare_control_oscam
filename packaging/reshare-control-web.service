@@ -1,0 +1,15 @@
+[Unit]
+Description=OSCAM Reshare Control web interface
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env reshare-control --config-dir /etc/reshare-control web
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

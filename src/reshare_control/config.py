@@ -1,8 +1,11 @@
 """Configuration loading, validation, persistence, and safe log masking."""
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
 import stat
 import tempfile
 
@@ -11,6 +14,8 @@ DEFAULT_CONFIG_DIR = "/etc/reshare-control"
 CONFIG_FILENAME = "config.json"
 
 DEFAULTS = {
+    "id": "default",
+    "name": "Default OSCam",
     "webif_user": "",
     "webif_pass": "",
     "base_path": "/usr/local/etc",
@@ -22,8 +27,15 @@ DEFAULTS = {
     "exempt_users": [],
 }
 
-SECRET_FIELDS = set(["webif_pass"])
-USERNAME_FIELDS = set(["webif_user"])
+WEB_DEFAULTS = {
+    "bind_host": "0.0.0.0",
+    "port": 8787,
+    "admin_user": "admin",
+    "admin_password_hash": "",
+}
+
+SECRET_FIELDS = set(["webif_pass", "admin_password_hash"])
+USERNAME_FIELDS = set(["webif_user", "admin_user"])
 
 
 class ConfigError(ValueError):
@@ -33,11 +45,13 @@ class ConfigError(ValueError):
 class InstanceConfig(object):
     """Validated OSCAM instance configuration."""
 
-    def __init__(self, host, port, webif_user="", webif_pass="",
-                 base_path="/usr/local/etc", max_ecm_per_min=20,
-                 strike_count=3, auto_stop_enabled=False,
-                 poll_interval_min=5, request_timeout_s=5,
-                 exempt_users=None):
+    def __init__(self, host, port, id="default", name="Default OSCam",
+                 webif_user="", webif_pass="", base_path="/usr/local/etc",
+                 max_ecm_per_min=20, strike_count=3,
+                 auto_stop_enabled=False, poll_interval_min=5,
+                 request_timeout_s=5, exempt_users=None):
+        self.id = id
+        self.name = name
         self.host = host
         self.port = port
         self.webif_user = webif_user
@@ -58,10 +72,13 @@ class InstanceConfig(object):
         missing = [key for key in ("host", "port") if key not in merged]
         if missing:
             raise ConfigError("missing required config key(s): %s" % ", ".join(missing))
+        merged["id"] = sanitize_instance_id(merged.get("id") or merged.get("name"))
         return cls(**merged)
 
     def to_dict(self):
         return {
+            "id": self.id,
+            "name": self.name,
             "host": self.host,
             "port": self.port,
             "webif_user": self.webif_user,
@@ -76,6 +93,12 @@ class InstanceConfig(object):
         }
 
     def validate(self):
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ConfigError("id must be a non-empty string")
+        if self.id != sanitize_instance_id(self.id):
+            raise ConfigError("id must contain only letters, numbers, dot, dash, or underscore")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ConfigError("name must be a non-empty string")
         if not isinstance(self.host, str) or not self.host.strip():
             raise ConfigError("host must be a non-empty string")
         self.port = _integer("port", self.port)
@@ -114,11 +137,109 @@ class InstanceConfig(object):
         return (self.webif_user, self.webif_pass)
 
 
+class WebConfig(object):
+    def __init__(self, bind_host="0.0.0.0", port=8787, admin_user="admin",
+                 admin_password_hash=""):
+        self.bind_host = bind_host
+        self.port = port
+        self.admin_user = admin_user
+        self.admin_password_hash = admin_password_hash
+        self.validate()
+
+    @classmethod
+    def from_dict(cls, data):
+        merged = dict(WEB_DEFAULTS)
+        merged.update(data or {})
+        return cls(**merged)
+
+    def to_dict(self):
+        return {
+            "bind_host": self.bind_host,
+            "port": self.port,
+            "admin_user": self.admin_user,
+            "admin_password_hash": self.admin_password_hash,
+        }
+
+    def validate(self):
+        if not isinstance(self.bind_host, str) or not self.bind_host:
+            raise ConfigError("web bind_host must be a non-empty string")
+        self.port = _integer("web port", self.port)
+        if self.port < 1 or self.port > 65535:
+            raise ConfigError("web port must be between 1 and 65535")
+        if not isinstance(self.admin_user, str) or not self.admin_user.strip():
+            raise ConfigError("admin_user must be a non-empty string")
+        if not isinstance(self.admin_password_hash, str):
+            raise ConfigError("admin_password_hash must be a string")
+
+
+class AppConfig(object):
+    def __init__(self, web=None, instances=None, version=2):
+        self.version = int(version)
+        self.web = web if isinstance(web, WebConfig) else WebConfig.from_dict(web)
+        self.instances = [
+            item if isinstance(item, InstanceConfig) else InstanceConfig.from_dict(item)
+            for item in (instances or [])
+        ]
+        self.validate()
+
+    @classmethod
+    def from_dict(cls, data):
+        if _looks_like_legacy_instance(data):
+            return cls(instances=[data], web=WEB_DEFAULTS)
+        return cls(
+            version=(data or {}).get("version", 2),
+            web=(data or {}).get("web", {}),
+            instances=(data or {}).get("instances", []),
+        )
+
+    def to_dict(self):
+        return {
+            "version": self.version,
+            "web": self.web.to_dict(),
+            "instances": [instance.to_dict() for instance in self.instances],
+        }
+
+    def validate(self):
+        seen = set()
+        for instance in self.instances:
+            if instance.id in seen:
+                raise ConfigError("duplicate instance id: %s" % instance.id)
+            seen.add(instance.id)
+
+    def get_instance(self, instance_id=None):
+        if not self.instances:
+            raise ConfigError("no OSCam instances configured")
+        if instance_id is None:
+            return self.instances[0]
+        for instance in self.instances:
+            if instance.id == instance_id:
+                return instance
+        raise ConfigError("unknown instance: %s" % instance_id)
+
+    def upsert_instance(self, instance):
+        if not isinstance(instance, InstanceConfig):
+            instance = InstanceConfig.from_dict(instance)
+        for index, current in enumerate(self.instances):
+            if current.id == instance.id:
+                self.instances[index] = instance
+                return
+        self.instances.append(instance)
+
+    def remove_instance(self, instance_id):
+        before = len(self.instances)
+        self.instances = [item for item in self.instances if item.id != instance_id]
+        return len(self.instances) != before
+
+
 def config_path(config_dir):
     return os.path.join(config_dir, CONFIG_FILENAME)
 
 
 def load_config(config_dir=DEFAULT_CONFIG_DIR, logger=None):
+    return load_app_config(config_dir, logger=logger).get_instance()
+
+
+def load_app_config(config_dir=DEFAULT_CONFIG_DIR, logger=None):
     path = config_path(config_dir)
     _ensure_owner_only_if_exists(path, logger)
     try:
@@ -128,13 +249,73 @@ def load_config(config_dir=DEFAULT_CONFIG_DIR, logger=None):
         raise ConfigError("cannot read %s: %s" % (path, exc))
     except ValueError as exc:
         raise ConfigError("invalid JSON in %s: %s" % (path, exc))
-    return InstanceConfig.from_dict(data)
+    return AppConfig.from_dict(data)
 
 
 def save_config(config, config_dir=DEFAULT_CONFIG_DIR):
-    if not isinstance(config, InstanceConfig):
-        config = InstanceConfig.from_dict(config)
+    if isinstance(config, AppConfig):
+        save_app_config(config, config_dir)
+        return
+    app = AppConfig(instances=[
+        config if isinstance(config, InstanceConfig) else InstanceConfig.from_dict(config)
+    ])
+    save_app_config(app, config_dir)
+
+
+def save_app_config(config, config_dir=DEFAULT_CONFIG_DIR):
+    if not isinstance(config, AppConfig):
+        config = AppConfig.from_dict(config)
     _atomic_write_json(config_path(config_dir), config.to_dict())
+
+
+def create_empty_app_config(admin_password=None, web_port=8787, bind_host="0.0.0.0"):
+    password = admin_password or secrets.token_urlsafe(14)
+    return AppConfig(
+        web=WebConfig(
+            bind_host=bind_host,
+            port=web_port,
+            admin_user="admin",
+            admin_password_hash=hash_password(password),
+        ),
+        instances=[],
+    ), password
+
+
+def hash_password(password, salt=None):
+    if not isinstance(password, str) or not password:
+        raise ConfigError("password must be a non-empty string")
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 salt.encode("ascii"), 120000)
+    return "pbkdf2_sha256$120000$%s$%s" % (salt, digest.hex())
+
+
+def verify_password(password, stored_hash):
+    try:
+        algorithm, rounds_text, salt, expected = stored_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                     salt.encode("ascii"), int(rounds_text))
+        return hmac.compare_digest(digest.hex(), expected)
+    except Exception:
+        return False
+
+
+def sanitize_instance_id(value):
+    text = str(value or "").strip().lower()
+    result = []
+    for char in text:
+        if char.isalnum() or char in ("-", "_", "."):
+            result.append(char)
+        elif char.isspace():
+            result.append("-")
+    cleaned = "".join(result).strip(".-_")
+    return cleaned or "oscam"
+
+
+def instance_state_dir(config_dir, instance_id):
+    return os.path.join(config_dir, "instances", sanitize_instance_id(instance_id))
 
 
 def mask_username(username):
@@ -152,7 +333,11 @@ def mask_username(username):
 
 def mask_for_log(value):
     """Return a JSON-safe copy with secrets removed and usernames masked."""
+    if isinstance(value, AppConfig):
+        value = value.to_dict()
     if isinstance(value, InstanceConfig):
+        value = value.to_dict()
+    if isinstance(value, WebConfig):
         value = value.to_dict()
     if isinstance(value, dict):
         masked = {}
@@ -169,6 +354,10 @@ def mask_for_log(value):
     if isinstance(value, list):
         return [mask_for_log(item) for item in value]
     return value
+
+
+def _looks_like_legacy_instance(data):
+    return isinstance(data, dict) and "host" in data and "port" in data
 
 
 def _integer(name, value):

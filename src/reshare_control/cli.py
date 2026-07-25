@@ -9,6 +9,8 @@ import sys
 from .config import (
     DEFAULT_CONFIG_DIR,
     ConfigError,
+    instance_state_dir,
+    load_app_config,
     load_config,
     mask_for_log,
     mask_username,
@@ -17,7 +19,7 @@ from .config import (
 from .enforce import EnforcementError, enable_account, stop_account
 from .parse import validate_userstats_body
 from .poller import run_cycle
-from .state import StateError, StateStore
+from .state import StateError, StateStore, UserStrikeState
 from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
 
 
@@ -41,21 +43,33 @@ def build_parser():
     subparsers = parser.add_subparsers(dest="command")
 
     run = subparsers.add_parser("run", help="run one poll cycle")
+    run.add_argument("--instance", help="OSCam instance id (default: first configured instance)")
     run.add_argument("--dry-run", action="store_true", help="evaluate without writing or enforcing")
     run.add_argument("--json", action="store_true", dest="command_json_output",
                      help="emit JSON output")
 
+    run_all = subparsers.add_parser("run-all", help="run one poll cycle for every configured instance")
+    run_all.add_argument("--json", action="store_true", dest="command_json_output",
+                         help="emit JSON output")
+
     status = subparsers.add_parser("status", help="print current persisted state")
+    status.add_argument("--instance", help="OSCam instance id (default: first configured instance)")
     status.add_argument("--json", action="store_true", dest="command_json_output",
                         help="emit JSON output")
 
     test = subparsers.add_parser("test", help="validate WebIF connectivity")
+    test.add_argument("--instance", help="OSCam instance id (default: first configured instance)")
     test.add_argument("--json", action="store_true", dest="command_json_output",
                       help="emit JSON output")
 
     for command in ("disable-user", "enable-user", "exempt-user", "unexempt-user"):
-        item = subparsers.add_parser(command, help="%s (implemented in later user stories)" % command)
+        item = subparsers.add_parser(command, help=command)
+        item.add_argument("--instance", help="OSCam instance id (default: first configured instance)")
         item.add_argument("name")
+
+    web = subparsers.add_parser("web", help="run the browser interface")
+    web.add_argument("--host", help="override configured web bind host")
+    web.add_argument("--port", type=int, help="override configured web port")
 
     return parser
 
@@ -79,6 +93,10 @@ def main(argv=None):
 
 
 def dispatch(args):
+    if args.command == "web":
+        return command_web(args)
+    if args.command == "run-all":
+        return command_run_all(args)
     table = {
         "run": command_run,
         "status": command_status,
@@ -91,12 +109,12 @@ def dispatch(args):
     handler = table.get(args.command)
     if handler is None:
         raise CommandDeferred("unknown command: %s" % args.command)
-    config = load_config(args.config_dir)
+    config = _load_selected_instance(args)
     return handler(args, config)
 
 
 def command_run(args, config):
-    store = StateStore(args.config_dir)
+    store = StateStore(instance_state_dir(args.config_dir, config.id))
     result = run_cycle(config, store, dry_run=getattr(args, "dry_run", False))
     if getattr(args, "json_output", False):
         print(json.dumps(result.to_dict(), sort_keys=True))
@@ -112,7 +130,7 @@ def command_run(args, config):
 
 
 def command_status(args, config):
-    store = StateStore(args.config_dir)
+    store = StateStore(instance_state_dir(args.config_dir, config.id))
     state = store.load()
     if getattr(args, "json_output", False):
         print(json.dumps(state.to_dict(), sort_keys=True))
@@ -160,13 +178,13 @@ def command_test(args, config):
 
 
 def command_disable_user(args, config):
-    store = StateStore(args.config_dir)
+    store = StateStore(instance_state_dir(args.config_dir, config.id))
     with store.locked():
         state = store.load()
         user_state = state.get_user(args.name) or UserStrikeState()
         stop_account(
             config,
-            args.config_dir,
+            store.config_dir,
             args.name,
             user_state,
             user_state.last_observed_ecm_min,
@@ -178,25 +196,56 @@ def command_disable_user(args, config):
 
 
 def command_enable_user(args, config):
-    store = StateStore(args.config_dir)
-    enable_account(config, args.config_dir, args.name, store)
+    store = StateStore(instance_state_dir(args.config_dir, config.id))
+    enable_account(config, store.config_dir, args.name, store)
     _command_user_output(args, "enabled", args.name)
     return EXIT_SUCCESS
 
 
 def command_exempt_user(args, config):
+    app = load_app_config(args.config_dir)
+    config = app.get_instance(getattr(args, "instance", None))
     if args.name not in config.exempt_users:
         config.exempt_users.append(args.name)
-        save_config(config, args.config_dir)
+        app.upsert_instance(config)
+        save_config(app, args.config_dir)
     _command_user_output(args, "exempted", args.name)
     return EXIT_SUCCESS
 
 
 def command_unexempt_user(args, config):
+    app = load_app_config(args.config_dir)
+    config = app.get_instance(getattr(args, "instance", None))
     if args.name in config.exempt_users:
         config.exempt_users = [name for name in config.exempt_users if name != args.name]
-        save_config(config, args.config_dir)
+        app.upsert_instance(config)
+        save_config(app, args.config_dir)
     _command_user_output(args, "unexempted", args.name)
+    return EXIT_SUCCESS
+
+
+def command_run_all(args):
+    app = load_app_config(args.config_dir)
+    results = {}
+    for config in app.instances:
+        store = StateStore(instance_state_dir(args.config_dir, config.id))
+        results[config.id] = run_cycle(config, store).to_dict()
+    if getattr(args, "json_output", False):
+        print(json.dumps(results, sort_keys=True))
+    else:
+        for instance_id, result in sorted(results.items()):
+            print("%s  %s  stopped=%s" % (
+                instance_id,
+                result.get("fetch_status"),
+                ",".join(result.get("stopped_users") or []) or "none",
+            ))
+    return EXIT_SUCCESS
+
+
+def command_web(args):
+    from .webapp import serve
+
+    serve(args.config_dir, bind_host=args.host, port=args.port)
     return EXIT_SUCCESS
 
 
@@ -242,6 +291,10 @@ def _format_ecm(value):
     if str(value) == "NO_READING":
         return "NO_READING"
     return value
+
+
+def _load_selected_instance(args):
+    return load_app_config(args.config_dir).get_instance(getattr(args, "instance", None))
 
 
 def _command_user_output(args, action, name):

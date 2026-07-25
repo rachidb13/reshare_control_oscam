@@ -106,102 +106,65 @@ fetch_source_if_needed() {
     exit 1
 }
 
-python_module_runner() {
+python_module_command() {
+    subcommand=$1
     if [ -n "$source_dir" ]; then
-        printf 'PYTHONPATH=%s %s -m reshare_control --config-dir %s run' "$source_dir" "$PYTHON" "$CONFIG_DIR"
+        printf 'PYTHONPATH=%s %s -m reshare_control --config-dir %s %s' "$source_dir" "$PYTHON" "$CONFIG_DIR" "$subcommand"
     else
-        printf '%s -m reshare_control --config-dir %s run' "$PYTHON" "$CONFIG_DIR"
+        printf '%s -m reshare_control --config-dir %s %s' "$PYTHON" "$CONFIG_DIR" "$subcommand"
     fi
 }
 
-write_config() {
+ensure_web_config() {
     target_dir=$1
+    mkdir -p "$target_dir"
+    chmod 700 "$target_dir"
     (
     RC_WRITE_CONFIG_DIR=$target_dir
-    RC_WRITE_HOST=$host
-    RC_WRITE_PORT=$port
-    RC_WRITE_USER=$webif_user
-    RC_WRITE_PASS=$webif_pass
-    export RC_WRITE_CONFIG_DIR RC_WRITE_HOST RC_WRITE_PORT RC_WRITE_USER RC_WRITE_PASS
+    export RC_WRITE_CONFIG_DIR
     run_python - <<'PY'
 import os
-from reshare_control.config import InstanceConfig, save_config
-
-config = InstanceConfig(
-    host=os.environ["RC_WRITE_HOST"],
-    port=os.environ["RC_WRITE_PORT"],
-    webif_user=os.environ.get("RC_WRITE_USER", ""),
-    webif_pass=os.environ.get("RC_WRITE_PASS", ""),
+from reshare_control.config import (
+    config_path,
+    create_empty_app_config,
+    hash_password,
+    load_app_config,
+    save_app_config,
 )
-save_config(config, os.environ["RC_WRITE_CONFIG_DIR"])
+
+config_dir = os.environ["RC_WRITE_CONFIG_DIR"]
+path = config_path(config_dir)
+generated = ""
+if os.path.exists(path):
+    app = load_app_config(config_dir)
+    if not app.web.admin_password_hash:
+        generated = "change-this-password"
+        app.web.admin_password_hash = hash_password(generated)
+    save_app_config(app, config_dir)
+else:
+    app, generated = create_empty_app_config()
+    save_app_config(app, config_dir)
+print(generated)
 PY
     )
-    chmod 700 "$target_dir"
     chmod 600 "$target_dir/config.json"
 }
 
-run_validation() {
-    write_config "$tmpdir"
-    run_python -m reshare_control --config-dir "$tmpdir" test
-}
-
-collect_connection() {
-    prompt "OSCAM WebIF host: " host
-    prompt "OSCAM WebIF port: " port
-    prompt "OSCAM WebIF username (blank for open WebIF): " webif_user
-    prompt_password "OSCAM WebIF password (blank for open WebIF): " webif_pass
-}
-
 fetch_source_if_needed
-collect_connection
-
-while :; do
-    status=0
-    run_validation || status=$?
-    if [ "$status" -eq 0 ]; then
-        say "WebIF validation succeeded."
-        break
-    fi
-    case $status in
-        2)
-            say "authentication failed"
-            prompt "OSCAM WebIF username (blank for open WebIF): " webif_user
-            prompt_password "OSCAM WebIF password (blank for open WebIF): " webif_pass
-            ;;
-        3)
-            say "unreachable -- check host/port"
-            prompt "Re-enter host/port or abort? [r/a]: " choice
-            case $choice in
-                a|A) say "Aborted."; exit 1 ;;
-                *) prompt "OSCAM WebIF host: " host
-                   prompt "OSCAM WebIF port: " port ;;
-            esac
-            ;;
-        4)
-            say "reachable but no usable ECM/min stats"
-            prompt "Continue anyway? [y/N]: " choice
-            case $choice in
-                y|Y) break ;;
-                *) say "Aborted."; exit 1 ;;
-            esac
-            ;;
-        *)
-            say "validation failed with exit code $status"
-            exit "$status"
-            ;;
-    esac
-done
 
 umask 077
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
-write_config "$CONFIG_DIR"
+admin_password=$(ensure_web_config "$CONFIG_DIR")
 
-runner="reshare-control --config-dir $CONFIG_DIR run"
+runner="reshare-control --config-dir $CONFIG_DIR run-all"
+web_runner="reshare-control --config-dir $CONFIG_DIR web"
 if command -v reshare-control >/dev/null 2>&1; then
     runner_cmd=$runner
+    web_runner_cmd=$web_runner
 else
-    runner_cmd=$(python_module_runner)
+    runner_cmd=$(python_module_command run-all)
+    web_runner_cmd=$(python_module_command web)
 fi
 
 install_systemd() {
@@ -218,7 +181,6 @@ Type=oneshot
 ExecStart=/usr/bin/env reshare-control --config-dir /etc/reshare-control run
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
 ProtectHome=true
 EOF
     fi
@@ -238,14 +200,41 @@ Unit=reshare-control.service
 WantedBy=timers.target
 EOF
     fi
+    if [ -f "$script_dir/packaging/reshare-control-web.service" ]; then
+        cp "$script_dir/packaging/reshare-control-web.service" "$SYSTEMD_DIR/reshare-control-web.service"
+    else
+        cat > "$SYSTEMD_DIR/reshare-control-web.service" <<'EOF'
+[Unit]
+Description=OSCAM Reshare Control web interface
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env reshare-control --config-dir /etc/reshare-control web
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
     escaped_config_dir=$(printf '%s\n' "$CONFIG_DIR" | sed 's/[|&]/\\&/g')
     sed "s|/etc/reshare-control|$escaped_config_dir|g" "$SYSTEMD_DIR/reshare-control.service" > "$SYSTEMD_DIR/reshare-control.service.tmp"
     mv "$SYSTEMD_DIR/reshare-control.service.tmp" "$SYSTEMD_DIR/reshare-control.service"
+    sed "s|/etc/reshare-control|$escaped_config_dir|g" "$SYSTEMD_DIR/reshare-control-web.service" > "$SYSTEMD_DIR/reshare-control-web.service.tmp"
+    mv "$SYSTEMD_DIR/reshare-control-web.service.tmp" "$SYSTEMD_DIR/reshare-control-web.service"
     escaped_runner_cmd=$(printf '%s\n' "$runner_cmd" | sed 's/[|&]/\\&/g')
     sed "s|^ExecStart=.*|ExecStart=/usr/bin/env $escaped_runner_cmd|" "$SYSTEMD_DIR/reshare-control.service" > "$SYSTEMD_DIR/reshare-control.service.tmp"
     mv "$SYSTEMD_DIR/reshare-control.service.tmp" "$SYSTEMD_DIR/reshare-control.service"
+    escaped_web_runner_cmd=$(printf '%s\n' "$web_runner_cmd" | sed 's/[|&]/\\&/g')
+    sed "s|^ExecStart=.*|ExecStart=/usr/bin/env $escaped_web_runner_cmd|" "$SYSTEMD_DIR/reshare-control-web.service" > "$SYSTEMD_DIR/reshare-control-web.service.tmp"
+    mv "$SYSTEMD_DIR/reshare-control-web.service.tmp" "$SYSTEMD_DIR/reshare-control-web.service"
     systemctl daemon-reload
     systemctl enable --now reshare-control.timer
+    systemctl enable --now reshare-control-web.service
 }
 
 install_cron() {
@@ -278,10 +267,29 @@ PY
 
 if command -v systemctl >/dev/null 2>&1 && systemctl >/dev/null 2>&1; then
     install_systemd
-    say "Installed systemd timer reshare-control.timer."
+    say "Installed systemd timer reshare-control.timer and web service reshare-control-web.service."
 else
     install_cron
-    say "Installed cron schedule for reshare-control."
+    say "Installed cron schedule for reshare-control. Start the web UI manually with:"
+    say "  $web_runner_cmd"
+fi
+
+web_port=$(run_python - "$CONFIG_DIR" <<'PY'
+import sys
+from reshare_control.config import load_app_config
+print(load_app_config(sys.argv[1]).web.port)
+PY
+)
+web_host=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+if [ -z "$web_host" ]; then
+    web_host=$(hostname 2>/dev/null || printf 'SERVER_IP')
 fi
 
 say "Configuration saved to $CONFIG_DIR/config.json."
+say "Open: http://$web_host:$web_port/"
+say "User: admin"
+if [ -n "$admin_password" ]; then
+    say "Password: $admin_password"
+else
+    say "Password: existing password in $CONFIG_DIR/config.json"
+fi

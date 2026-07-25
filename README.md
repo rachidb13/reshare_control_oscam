@@ -1,8 +1,9 @@
 # OSCAM Reshare Control
 
-OSCAM Reshare Control monitors OSCAM WebIF user statistics, tracks sustained
-ECM/min over-limit behavior, and can optionally disable users that keep exceeding
-the configured threshold.
+OSCAM Reshare Control installs a small web interface on a VPS. From the browser
+you can add one or more local OSCam instances, monitor WebIF ECM/min statistics,
+track sustained over-limit behavior, and optionally disable users that keep
+exceeding the configured threshold.
 
 The default posture is detection only. Users are flagged after consecutive
 over-limit cycles, but nobody is disabled unless `auto_stop_enabled` is set to
@@ -16,57 +17,68 @@ From a cloned checkout on the OSCAM VPS:
 sudo ./install.sh
 ```
 
-For a piped install after publishing the repo, pass a tarball URL so the script
-can persist the Python source used by the scheduled timer:
+One copy-paste install from GitHub:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh \
   | sudo RC_SOURCE_URL=https://github.com/<owner>/<repo>/archive/refs/heads/main.tar.gz sh
 ```
 
-The installer asks for:
+For this repository after merge to `main`:
 
-- OSCAM WebIF host
-- OSCAM WebIF port
-- OSCAM WebIF username, blank for open WebIF
-- OSCAM WebIF password, hidden while typed
+```sh
+curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh \
+  | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh
+```
 
-It validates `/oscamapi.json?part=userstats` before saving config, writes
-`/etc/reshare-control/config.json` with mode `0600`, and installs a systemd timer
-or cron fallback.
+The installer writes `/etc/reshare-control/config.json` with mode `0600`, starts
+the web interface, installs a scheduled monitor, and prints:
+
+- browser URL, usually `http://SERVER_IP:8787/`
+- admin username
+- generated admin password
+
+Log in from a browser, then add each OSCam running on that VPS with:
+
+- display name
+- WebIF host and port, usually `127.0.0.1` plus that OSCam WebIF port
+- WebIF username/password, blank for open WebIF
+- OSCam config directory containing `oscam.user`
+- ECM/min limit, strike count, poll interval, and auto-stop switch
 
 ## Commands
 
-Run one monitoring cycle:
+Run one monitoring cycle for every configured OSCam:
 
 ```sh
-reshare-control --config-dir /etc/reshare-control run
+reshare-control --config-dir /etc/reshare-control run-all
 ```
 
-Show persisted state:
+Run or show one instance:
 
 ```sh
-reshare-control --config-dir /etc/reshare-control status
+reshare-control --config-dir /etc/reshare-control run --instance INSTANCE_ID
+reshare-control --config-dir /etc/reshare-control status --instance INSTANCE_ID
 ```
 
-Validate WebIF access:
+Start the web UI manually:
 
 ```sh
-reshare-control --config-dir /etc/reshare-control test
+reshare-control --config-dir /etc/reshare-control web
 ```
 
 Manual control:
 
 ```sh
-reshare-control --config-dir /etc/reshare-control disable-user USER
-reshare-control --config-dir /etc/reshare-control enable-user USER
-reshare-control --config-dir /etc/reshare-control exempt-user USER
-reshare-control --config-dir /etc/reshare-control unexempt-user USER
+reshare-control --config-dir /etc/reshare-control disable-user --instance INSTANCE_ID USER
+reshare-control --config-dir /etc/reshare-control enable-user --instance INSTANCE_ID USER
+reshare-control --config-dir /etc/reshare-control exempt-user --instance INSTANCE_ID USER
+reshare-control --config-dir /etc/reshare-control unexempt-user --instance INSTANCE_ID USER
 ```
 
 ## Configuration
 
-Main settings in `/etc/reshare-control/config.json`:
+Main settings per instance in `/etc/reshare-control/config.json`:
 
 - `max_ecm_per_min`: global ECM/min threshold, default `20`
 - `strike_count`: consecutive over-limit cycles before flagging, default `3`
@@ -74,6 +86,12 @@ Main settings in `/etc/reshare-control/config.json`:
 - `base_path`: directory containing `oscam.user`, default `/usr/local/etc`
 - `poll_interval_min`: schedule cadence, default `5`
 - `exempt_users`: usernames that are evaluated but never auto-stopped
+
+Per-instance state and audit files are stored under:
+
+```text
+/etc/reshare-control/instances/INSTANCE_ID/
+```
 
 When enforcement is enabled, the tool edits only the matching `[account]` block
 in `oscam.user`, applies `GET /userconfig.html?action=reinit`, and appends audit
