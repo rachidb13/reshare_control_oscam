@@ -302,12 +302,16 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         <p>Users read: %s</p>
         <p>Local accounts: %s</p>
         <p>Stopped users: %s</p>
+        <p>Telegram notified: %s</p>
+        %s
         <p><a href="/instance/%s">Back to instance</a></p>
         """ % (
             _e(result.fetch_status),
             len(result.users),
             len(instance.user_policies),
             _e(", ".join(result.stopped_users) or "none"),
+            _e(_notified_users(result)),
+            _notification_errors(result),
             _e(instance.id),
         )))
 
@@ -489,6 +493,22 @@ def _connected_label(value):
     if value is False:
         return "disconnected"
     return "unknown"
+
+
+def _notified_users(result):
+    users = [user.name for user in result.users if user.notified]
+    return ", ".join(users) or "none"
+
+
+def _notification_errors(result):
+    rows = []
+    for user in result.users:
+        if user.notified or not user.notification_error:
+            continue
+        rows.append("<li>%s: %s</li>" % (_e(user.name), _e(user.notification_error)))
+    if not rows:
+        return ""
+    return "<p class='error'>Telegram errors:</p><ul>%s</ul>" % "".join(rows)
 
 
 def _has_special_policy(instance, username):

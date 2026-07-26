@@ -24,8 +24,10 @@ class FakeFetcher(object):
 
 
 class FakeNotifier(object):
-    def __init__(self):
+    def __init__(self, ok=True, error=""):
         self.messages = []
+        self.ok = ok
+        self.error = error
 
     def send(self, config, user, observed_ecm_min, threshold, action, stopped):
         self.messages.append({
@@ -36,7 +38,7 @@ class FakeNotifier(object):
             "action": action,
             "stopped": stopped,
         })
-        return type("Result", (), {"ok": True})()
+        return type("Result", (), {"ok": self.ok, "error": self.error})()
 
 
 def _config(**overrides):
@@ -247,7 +249,9 @@ def test_notify_only_user_policy_flags_and_notifies_without_stopping(tmp_path):
     assert result.stopped_users == []
     assert result.users[0].threshold == 10.0
     assert result.users[0].action == "notify"
+    assert result.users[0].notified is True
     assert notifier.messages[-1]["stopped"] is False
+    assert '"action": "notify"' in (tmp_path / "audit.log").read_text()
 
 
 def test_nested_userstats_rate_updates_connected_state(tmp_path):

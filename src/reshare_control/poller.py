@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 import json
 
-from .enforce import reinstate_account, stop_account
+from .enforce import append_audit_record, reinstate_account, stop_account
 from .notify import TelegramNotifier, should_notify
 from .parse import NO_READING, normalize_userstats_body
 from .state import UserStrikeState
@@ -14,7 +14,7 @@ from .webif import CurlFetcher, OK
 class CycleUserResult(object):
     def __init__(self, name, ecm_per_min, state, should_stop=False,
                  threshold=None, action="global", notified=False,
-                 connected=None):
+                 connected=None, notification_error=""):
         self.name = name
         self.ecm_per_min = ecm_per_min
         self.state = state
@@ -23,6 +23,7 @@ class CycleUserResult(object):
         self.action = action
         self.notified = bool(notified)
         self.connected = connected
+        self.notification_error = notification_error
 
     def to_dict(self):
         return {
@@ -35,6 +36,7 @@ class CycleUserResult(object):
             "threshold": self.threshold,
             "action": self.action,
             "notified": self.notified,
+            "notification_error": self.notification_error,
             "connected": self.connected,
             "stopped_until": self.state.stopped_until,
         }
@@ -139,16 +141,30 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
                 and before_strikes < effective.strike_count
             )
             notified = False
+            notification_error = ""
             if (not dry_run and monitored.ecm_per_min is not NO_READING
                     and should_notify(config, effective.policy, crossed_threshold, stopped)):
-                notified = notifier.send(
+                notification = notifier.send(
                     config,
                     monitored.name,
                     monitored.ecm_per_min,
                     effective.max_ecm_per_min,
                     effective.policy.action,
                     stopped,
-                ).ok
+                )
+                notified = notification.ok
+                notification_error = getattr(notification, "error", "")
+                append_audit_record(
+                    store.config_dir,
+                    action="notify",
+                    user=monitored.name,
+                    observed_ecm_min=monitored.ecm_per_min,
+                    threshold=effective.max_ecm_per_min,
+                    strike_count=evaluation.state.consecutive_strikes,
+                    result="ok" if notified else "error:%s" % notification_error,
+                    timestamp=evaluated_at,
+                    stopped_until=evaluation.state.stopped_until,
+                )
             state.set_user(monitored.name, evaluation.state)
             users.append(CycleUserResult(monitored.name, monitored.ecm_per_min,
                                          evaluation.state,
@@ -156,7 +172,8 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
                                          threshold=effective.max_ecm_per_min,
                                          action=effective.policy.action,
                                          notified=notified,
-                                         connected=monitored.connected))
+                                         connected=monitored.connected,
+                                         notification_error=notification_error))
 
         for name, current in sorted(state.users.items()):
             if name in seen or current.status == "stopped":
