@@ -18,6 +18,22 @@ class EnforcementError(RuntimeError):
     """Raised when an OSCAM account cannot be safely edited or applied."""
 
 
+def list_account_users(base_path):
+    """Return usernames from local oscam.user [account] blocks."""
+    path = os.path.join(base_path, OSCAM_USER_FILENAME)
+    try:
+        with open(path, "r") as fh:
+            lines = fh.readlines()
+    except IOError as exc:
+        raise EnforcementError("cannot read %s: %s" % (path, exc))
+    users = []
+    for start, end in _account_blocks(lines):
+        username = _block_username(lines[start:end])
+        if username:
+            users.append(username)
+    return users
+
+
 def set_account_disabled(base_path, username, disabled):
     """Set disabled=1/0 for exactly one OSCAM [account] block."""
     path = os.path.join(base_path, OSCAM_USER_FILENAME)

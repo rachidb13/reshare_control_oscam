@@ -1,6 +1,7 @@
 from reshare_control.config import (
     AppConfig,
     InstanceConfig,
+    UserPolicy,
     create_empty_app_config,
     instance_state_dir,
     load_app_config,
@@ -51,3 +52,36 @@ def test_sanitize_instance_id_and_state_dir():
     assert instance_state_dir("/etc/reshare-control", "Local OSCam 1!") == (
         "/etc/reshare-control/instances/local-oscam-1"
     )
+
+
+def test_instance_config_round_trips_telegram_and_user_policies():
+    config = InstanceConfig(
+        id="main",
+        name="Main",
+        host="127.0.0.1",
+        port=8888,
+        notify_enabled=True,
+        telegram_enabled=True,
+        telegram_bot_token="123:abc",
+        telegram_chat_id="42",
+        user_policies={
+            "alpha": {"action": "notify", "max_ecm_per_min": "12.5"},
+            "bravo": {"action": "ignore"},
+        },
+    )
+
+    data = config.to_dict()
+    loaded = InstanceConfig.from_dict(data)
+
+    assert loaded.telegram_enabled is True
+    assert loaded.telegram_bot_token == "123:abc"
+    assert loaded.policy_for("alpha").action == "notify"
+    assert loaded.policy_for("alpha").max_ecm_per_min == 12.5
+    assert loaded.policy_for("bravo").action == "ignore"
+
+
+def test_user_policy_defaults_to_global():
+    policy = UserPolicy.from_dict({})
+
+    assert policy.action == "global"
+    assert policy.max_ecm_per_min is None

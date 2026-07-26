@@ -6,6 +6,7 @@ from reshare_control.config import InstanceConfig
 from reshare_control.enforce import (
     AUDIT_FILENAME,
     enable_account,
+    list_account_users,
     set_account_disabled,
     stop_account,
 )
@@ -59,6 +60,22 @@ disabled = 0
     assert "user = alpha\npwd = one\n" in text
     assert "user = bravo\npwd = two\ndisabled = 1\n" in text
     assert stat.S_IMODE(os.stat(str(path)).st_mode) == 0o640
+
+
+def test_list_account_users_reads_all_account_blocks(tmp_path):
+    _write_user_file(tmp_path, """[account]
+user = alpha
+pwd = one
+
+[reader]
+label = ignored
+
+[account]
+user = bravo
+disabled = 0
+""")
+
+    assert list_account_users(str(tmp_path)) == ["alpha", "bravo"]
 
 
 def test_set_account_disabled_adds_missing_disabled_line_idempotently(tmp_path):

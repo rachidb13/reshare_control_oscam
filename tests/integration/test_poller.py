@@ -23,6 +23,22 @@ class FakeFetcher(object):
         return FetchResult(OK, body=item, http_status=200)
 
 
+class FakeNotifier(object):
+    def __init__(self):
+        self.messages = []
+
+    def send(self, config, user, observed_ecm_min, threshold, action, stopped):
+        self.messages.append({
+            "instance": config.name,
+            "user": user,
+            "observed": observed_ecm_min,
+            "threshold": threshold,
+            "action": action,
+            "stopped": stopped,
+        })
+        return type("Result", (), {"ok": True})()
+
+
 def _config(**overrides):
     data = {
         "host": "127.0.0.1",
@@ -194,3 +210,83 @@ def test_enforcement_off_and_exempt_users_do_not_stop(tmp_path):
     assert exempt_result.stopped_users == []
     assert exempt_store.load().get_user("trusted").status == "flagged"
     assert exempt_fetcher.requests == ["/oscamapi.json?part=userstats"]
+
+
+def test_notify_only_user_policy_flags_and_notifies_without_stopping(tmp_path):
+    config = _config(
+        strike_count=1,
+        auto_stop_enabled=True,
+        notify_enabled=True,
+        user_policies={"alpha": {"action": "notify", "max_ecm_per_min": 10}},
+        base_path=str(tmp_path),
+    )
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([_body([_user("alpha", 11)])])
+    notifier = FakeNotifier()
+
+    result = run_cycle(
+        config,
+        store,
+        fetcher=fetcher,
+        notifier=notifier,
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    assert store.load().get_user("alpha").status == "flagged"
+    assert result.stopped_users == []
+    assert result.users[0].threshold == 10.0
+    assert result.users[0].action == "notify"
+    assert notifier.messages[-1]["stopped"] is False
+
+
+def test_stop_user_policy_can_stop_when_global_auto_stop_is_off(tmp_path):
+    config = _config(
+        strike_count=1,
+        auto_stop_enabled=False,
+        user_policies={"alpha": {"action": "stop", "max_ecm_per_min": 10}},
+        base_path=str(tmp_path),
+    )
+    store = _store(tmp_path, config)
+    (tmp_path / "oscam.user").write_text("""[account]
+user = alpha
+pwd = one
+""")
+    fetcher = FakeFetcher([
+        _body([_user("alpha", 11)]),
+        FetchResult(OK, body="ok", http_status=200),
+    ])
+
+    result = run_cycle(
+        config,
+        store,
+        fetcher=fetcher,
+        notifier=FakeNotifier(),
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    assert store.load().get_user("alpha").status == "stopped"
+    assert result.stopped_users == ["alpha"]
+
+
+def test_ignore_user_policy_never_stops(tmp_path):
+    config = _config(
+        strike_count=1,
+        auto_stop_enabled=True,
+        user_policies={"alpha": {"action": "ignore", "max_ecm_per_min": 1}},
+        base_path=str(tmp_path),
+    )
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([_body([_user("alpha", 99)])])
+
+    result = run_cycle(
+        config,
+        store,
+        fetcher=fetcher,
+        notifier=FakeNotifier(),
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    state = store.load().get_user("alpha")
+    assert state.status == "flagged"
+    assert state.exempt is True
+    assert result.stopped_users == []

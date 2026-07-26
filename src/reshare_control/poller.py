@@ -3,6 +3,7 @@
 import json
 
 from .enforce import stop_account
+from .notify import TelegramNotifier, should_notify
 from .parse import NO_READING, normalize_userstats_body
 from .state import UserStrikeState
 from .strike import evaluate_strike
@@ -10,11 +11,15 @@ from .webif import CurlFetcher, OK
 
 
 class CycleUserResult(object):
-    def __init__(self, name, ecm_per_min, state, should_stop=False):
+    def __init__(self, name, ecm_per_min, state, should_stop=False,
+                 threshold=None, action="global", notified=False):
         self.name = name
         self.ecm_per_min = ecm_per_min
         self.state = state
         self.should_stop = bool(should_stop)
+        self.threshold = threshold
+        self.action = action
+        self.notified = bool(notified)
 
     def to_dict(self):
         return {
@@ -24,6 +29,9 @@ class CycleUserResult(object):
             "status": self.state.status,
             "strikes": self.state.consecutive_strikes,
             "should_stop": self.should_stop,
+            "threshold": self.threshold,
+            "action": self.action,
+            "notified": self.notified,
         }
 
 
@@ -41,7 +49,8 @@ class CycleResult(object):
         }
 
 
-def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
+def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
+              notifier=None):
     fetcher = fetcher or CurlFetcher(config.base_url(), auth=config.auth(),
                                      timeout_s=config.request_timeout_s)
     fetch = fetcher.get("/oscamapi.json?part=userstats")
@@ -58,6 +67,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
         monitored_users = None
 
     result_holder = {}
+    notifier = notifier if notifier is not None else TelegramNotifier()
 
     def update(state):
         users = []
@@ -67,16 +77,19 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
                 if current.status == "stopped":
                     continue
                 current.exempt = name in config.exempt_users
+                effective = _effective_config(config, name)
                 evaluation = evaluate_strike(
                     NO_READING,
                     current,
-                    config,
+                    effective,
                     evaluated_at=evaluated_at,
                 )
-                evaluation.state.exempt = name in config.exempt_users
+                evaluation.state.exempt = effective.policy.action == "ignore"
                 state.set_user(name, evaluation.state)
                 users.append(CycleUserResult(name, NO_READING, evaluation.state,
-                                             evaluation.should_stop))
+                                             evaluation.should_stop,
+                                             threshold=effective.max_ecm_per_min,
+                                             action=effective.policy.action))
             result_holder["result"] = CycleResult(users, stopped_users, fetch.status)
             return state
 
@@ -88,15 +101,18 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
                 continue
             if current is None:
                 current = UserStrikeState()
-            current.exempt = monitored.name in config.exempt_users
+            effective = _effective_config(config, monitored.name)
+            before_strikes = current.consecutive_strikes
+            current.exempt = effective.policy.action == "ignore"
             evaluation = evaluate_strike(
                 monitored.ecm_per_min,
                 current,
-                config,
+                effective,
                 evaluated_at=evaluated_at,
                 already_disabled=False,
             )
-            evaluation.state.exempt = monitored.name in config.exempt_users
+            evaluation.state.exempt = effective.policy.action == "ignore"
+            stopped = False
             if evaluation.should_stop and not dry_run:
                 stop_account(
                     config,
@@ -108,25 +124,47 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
                     timestamp=evaluated_at,
                 )
                 stopped_users.append(monitored.name)
+                stopped = True
+            crossed_threshold = (
+                evaluation.state.consecutive_strikes >= effective.strike_count
+                and before_strikes < effective.strike_count
+            )
+            notified = False
+            if (not dry_run and monitored.ecm_per_min is not NO_READING
+                    and should_notify(config, effective.policy, crossed_threshold, stopped)):
+                notified = notifier.send(
+                    config,
+                    monitored.name,
+                    monitored.ecm_per_min,
+                    effective.max_ecm_per_min,
+                    effective.policy.action,
+                    stopped,
+                ).ok
             state.set_user(monitored.name, evaluation.state)
             users.append(CycleUserResult(monitored.name, monitored.ecm_per_min,
                                          evaluation.state,
-                                         evaluation.should_stop))
+                                         evaluation.should_stop,
+                                         threshold=effective.max_ecm_per_min,
+                                         action=effective.policy.action,
+                                         notified=notified))
 
         for name, current in sorted(state.users.items()):
             if name in seen or current.status == "stopped":
                 continue
-            current.exempt = name in config.exempt_users
+            effective = _effective_config(config, name)
+            current.exempt = effective.policy.action == "ignore"
             evaluation = evaluate_strike(
                 NO_READING,
                 current,
-                config,
+                effective,
                 evaluated_at=evaluated_at,
             )
-            evaluation.state.exempt = name in config.exempt_users
+            evaluation.state.exempt = effective.policy.action == "ignore"
             state.set_user(name, evaluation.state)
             users.append(CycleUserResult(name, NO_READING, evaluation.state,
-                                         evaluation.should_stop))
+                                         evaluation.should_stop,
+                                         threshold=effective.max_ecm_per_min,
+                                         action=effective.policy.action))
 
         result_holder["result"] = CycleResult(users, stopped_users, fetch.status)
         return state
@@ -137,6 +175,36 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False):
     else:
         store.locked_update(update)
     return result_holder["result"]
+
+
+class _EffectiveConfig(object):
+    def __init__(self, config, username):
+        self._config = config
+        self.policy = config.policy_for(username)
+        self.max_ecm_per_min = (
+            self.policy.max_ecm_per_min
+            if self.policy.max_ecm_per_min is not None
+            else config.max_ecm_per_min
+        )
+        self.strike_count = config.strike_count
+        self.auto_stop_enabled = _effective_auto_stop(config, self.policy)
+
+    def __getattr__(self, name):
+        return getattr(self._config, name)
+
+
+def _effective_config(config, username):
+    return _EffectiveConfig(config, username)
+
+
+def _effective_auto_stop(config, policy):
+    if policy.action == "ignore":
+        return False
+    if policy.action == "notify":
+        return False
+    if policy.action == "stop":
+        return True
+    return config.auto_stop_enabled
 
 
 def _needs_userconfig_retry(body, users):

@@ -13,13 +13,14 @@ from .config import (
     AppConfig,
     ConfigError,
     InstanceConfig,
+    UserPolicy,
     instance_state_dir,
     load_app_config,
     sanitize_instance_id,
     save_app_config,
     verify_password,
 )
-from .enforce import enable_account, stop_account
+from .enforce import EnforcementError, enable_account, list_account_users, stop_account
 from .poller import run_cycle
 from .state import StateStore, UserStrikeState
 from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
@@ -73,6 +74,8 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 return self._set_exempt(form, True)
             if parsed.path == "/users/unexempt":
                 return self._set_exempt(form, False)
+            if parsed.path == "/users/policy":
+                return self._save_user_policy(form)
         except Exception as exc:
             return self._send_html(_page("Error", "<p class='error'>%s</p><p><a href='/'>Back</a></p>" % _e(exc)), status=500)
         self._send_html("Not found", status=404)
@@ -113,9 +116,9 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             rows.append("""
             <tr>
               <td><a href="/instance/%s">%s</a><span>%s:%s</span></td>
-              <td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td class="actions">
-                <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Run</button></form>
+                <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
                 <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
               </td>
             </tr>
@@ -123,6 +126,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 _e(instance.id), _e(instance.name), _e(instance.host), instance.port,
                 instance.max_ecm_per_min, instance.strike_count,
                 "on" if instance.auto_stop_enabled else "off",
+                "on" if instance.telegram_enabled else "off",
                 "%s / %s" % (flagged, stopped),
                 _e(instance.id), _e(instance.id),
             ))
@@ -134,7 +138,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         <section>
           <h2>Instances</h2>
           <table>
-            <thead><tr><th>Name</th><th>ECM/min</th><th>Strikes</th><th>Auto-stop</th><th>Flagged / stopped</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>ECM/min</th><th>Strikes</th><th>Auto-stop</th><th>Telegram</th><th>Flagged / stopped</th><th></th></tr></thead>
             <tbody>%s</tbody>
           </table>
         </section>
@@ -150,13 +154,24 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         state = store.load()
         rows = []
         for username, user_state in sorted(state.users.items()):
+            policy = instance.policy_for(username)
+            max_value = "" if policy.max_ecm_per_min is None else policy.max_ecm_per_min
             rows.append("""
             <tr>
               <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>
+                <form method="post" action="/users/policy" class="policy">
+                  <input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s">
+                  <input name="max_ecm_per_min" type="number" step="0.1" min="0.1" placeholder="%s" value="%s">
+                  <select name="action">
+                    %s
+                  </select>
+                  <button>Save</button>
+                </form>
+              </td>
               <td class="actions">
                 <form method="post" action="/users/disable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button class="danger">Disable</button></form>
                 <form method="post" action="/users/enable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>Enable</button></form>
-                %s
               </td>
             </tr>
             """ % (
@@ -164,19 +179,20 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 _e(user_state.last_observed_ecm_min if user_state.last_observed_ecm_min is not None else "NO_READING"),
                 user_state.consecutive_strikes,
                 _e(user_state.status),
-                "yes" if user_state.exempt else "no",
+                _e(policy.action),
+                _e(instance.id), _e(username), instance.max_ecm_per_min, _e(max_value),
+                _action_options(policy.action),
                 _e(instance.id), _e(username), _e(instance.id), _e(username),
-                _exempt_button(instance, username, user_state.exempt),
             ))
         body = """
         <section class="toolbar">
           <div><a href="/">Back</a><h1>%s</h1><p>%s:%s · %s</p></div>
-          <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Run now</button></form>
+          <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
         </section>
         <section>
           <h2>Users</h2>
           <table>
-            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Exempt</th><th></th></tr></thead>
+            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Action</th><th>Policy</th><th></th></tr></thead>
             <tbody>%s</tbody>
           </table>
         </section>
@@ -193,22 +209,39 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         app = load_app_config(self.app_config_dir)
         name = _first(form, "name")
         instance_id = sanitize_instance_id(_first(form, "id") or name)
+        existing = None
+        try:
+            existing = app.get_instance(instance_id)
+        except ConfigError:
+            existing = None
+        webif_pass = _first(form, "webif_pass")
+        telegram_bot_token = _first(form, "telegram_bot_token")
+        if existing is not None:
+            if not webif_pass:
+                webif_pass = existing.webif_pass
+            if not telegram_bot_token:
+                telegram_bot_token = existing.telegram_bot_token
         instance = InstanceConfig(
             id=instance_id,
             name=name,
             host=_first(form, "host"),
             port=_first(form, "port"),
             webif_user=_first(form, "webif_user"),
-            webif_pass=_first(form, "webif_pass"),
+            webif_pass=webif_pass,
             base_path=_first(form, "base_path") or "/usr/local/etc",
             max_ecm_per_min=_first(form, "max_ecm_per_min") or 20,
             strike_count=_first(form, "strike_count") or 3,
             auto_stop_enabled=_first(form, "auto_stop_enabled") == "1",
+            notify_enabled=_first(form, "notify_enabled") == "1",
+            telegram_enabled=_first(form, "telegram_enabled") == "1",
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=_first(form, "telegram_chat_id"),
             poll_interval_min=_first(form, "poll_interval_min") or 5,
             request_timeout_s=_first(form, "request_timeout_s") or 5,
-            exempt_users=_split_lines(_first(form, "exempt_users")),
+            user_policies=_existing_policies(app, instance_id),
         )
         app.upsert_instance(instance)
+        _sync_local_account_users(self.app_config_dir, instance)
         save_app_config(app, self.app_config_dir)
 
     def _delete_instance(self, form):
@@ -220,11 +253,22 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         app = load_app_config(self.app_config_dir)
         instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
         result = run_cycle(instance, StateStore(instance_state_dir(self.app_config_dir, instance.id)))
+        _ensure_policies_from_result(app, instance, result)
+        _sync_local_account_users(self.app_config_dir, instance)
+        save_app_config(app, self.app_config_dir)
         return self._send_html(_page("Run complete", """
         <p>Fetch status: %s</p>
+        <p>Users read: %s</p>
+        <p>Local accounts: %s</p>
         <p>Stopped users: %s</p>
         <p><a href="/instance/%s">Back to instance</a></p>
-        """ % (_e(result.fetch_status), _e(", ".join(result.stopped_users) or "none"), _e(instance.id))))
+        """ % (
+            _e(result.fetch_status),
+            len(result.users),
+            len(instance.user_policies),
+            _e(", ".join(result.stopped_users) or "none"),
+            _e(instance.id),
+        )))
 
     def _disable_user(self, form):
         app = load_app_config(self.app_config_dir)
@@ -261,6 +305,20 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         save_app_config(app, self.app_config_dir)
         return self._redirect("/instance/%s" % instance.id)
 
+    def _save_user_policy(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        username = _first(form, "user")
+        instance.user_policies[username] = UserPolicy(
+            max_ecm_per_min=_first(form, "max_ecm_per_min"),
+            action=_first(form, "action") or "global",
+        ).to_dict()
+        if username in instance.exempt_users:
+            instance.exempt_users = [item for item in instance.exempt_users if item != username]
+        app.upsert_instance(instance)
+        save_app_config(app, self.app_config_dir)
+        return self._redirect("/instance/%s" % instance.id)
+
     def _read_form(self):
         length = int(self.headers.get("Content-Length", "0") or 0)
         data = self.rfile.read(length).decode("utf-8") if length else ""
@@ -291,24 +349,29 @@ def _instance_form(instance=None):
         <label>WebIF host<input name="host" required value="%s"></label>
         <label>WebIF port<input name="port" type="number" min="1" max="65535" required value="%s"></label>
         <label>WebIF user<input name="webif_user" value="%s"></label>
-        <label>WebIF password<input name="webif_pass" type="password" value="%s"></label>
+        <label>WebIF password<input name="webif_pass" type="password" placeholder="%s" value=""></label>
         <label>OSCam config path<input name="base_path" required value="%s"></label>
         <label>Max ECM/min<input name="max_ecm_per_min" type="number" step="0.1" min="0.1" value="%s"></label>
         <label>Strike count<input name="strike_count" type="number" min="1" value="%s"></label>
         <label>Poll minutes<input name="poll_interval_min" type="number" min="1" value="%s"></label>
         <label>Timeout seconds<input name="request_timeout_s" type="number" min="1" value="%s"></label>
         <label class="check"><input name="auto_stop_enabled" type="checkbox" value="1" %s> Auto-stop</label>
-        <label class="wide">Exempt users<textarea name="exempt_users">%s</textarea></label>
+        <label class="check"><input name="notify_enabled" type="checkbox" value="1" %s> Notify</label>
+        <label class="check"><input name="telegram_enabled" type="checkbox" value="1" %s> Telegram</label>
+        <label>Telegram bot token<input name="telegram_bot_token" type="password" placeholder="%s" value=""></label>
+        <label>Telegram admin chat ID<input name="telegram_chat_id" value="%s"></label>
         <button>Save OSCam</button>
       </form>
     </section>
     """ % (
         "Edit OSCam" if instance.id else "Add OSCam",
         _e(instance.id), _e(instance.name), _e(instance.host), instance.port,
-        _e(instance.webif_user), _e(instance.webif_pass), _e(instance.base_path),
+        _e(instance.webif_user), _secret_placeholder(instance.webif_pass), _e(instance.base_path),
         instance.max_ecm_per_min, instance.strike_count, instance.poll_interval_min,
         instance.request_timeout_s, "checked" if instance.auto_stop_enabled else "",
-        _e("\n".join(instance.exempt_users)),
+        "checked" if instance.notify_enabled else "",
+        "checked" if instance.telegram_enabled else "",
+        _secret_placeholder(instance.telegram_bot_token), _e(instance.telegram_chat_id),
     )
 
 
@@ -317,6 +380,51 @@ def _exempt_button(instance, username, exempt):
     label = "Unexempt" if exempt else "Exempt"
     return '<form method="post" action="%s"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>%s</button></form>' % (
         action, _e(instance.id), _e(username), label)
+
+
+def _action_options(selected):
+    labels = [
+        ("global", "Use global"),
+        ("notify", "Notify only"),
+        ("stop", "Stop"),
+        ("ignore", "Ignore"),
+    ]
+    return "".join(
+        '<option value="%s" %s>%s</option>' % (
+            value,
+            "selected" if value == selected else "",
+            label,
+        )
+        for value, label in labels
+    )
+
+
+def _existing_policies(app, instance_id):
+    try:
+        return app.get_instance(instance_id).user_policies
+    except ConfigError:
+        return {}
+
+
+def _ensure_policies_from_result(app, instance, result):
+    for user in result.users:
+        instance.ensure_user_policy(user.name)
+    app.upsert_instance(instance)
+
+
+def _sync_local_account_users(config_dir, instance):
+    store = StateStore(instance_state_dir(config_dir, instance.id))
+    try:
+        users = list_account_users(instance.base_path)
+    except EnforcementError:
+        return []
+    state = store.load()
+    for username in users:
+        instance.ensure_user_policy(username)
+        if state.get_user(username) is None:
+            state.set_user(username, UserStrikeState())
+    store.save(state)
+    return users
 
 
 class _EmptyInstance(object):
@@ -332,7 +440,12 @@ class _EmptyInstance(object):
     poll_interval_min = 5
     request_timeout_s = 5
     auto_stop_enabled = False
+    notify_enabled = True
+    telegram_enabled = False
+    telegram_bot_token = ""
+    telegram_chat_id = ""
     exempt_users = []
+    user_policies = {}
 
 
 def _page(title, body):
@@ -345,6 +458,7 @@ def _page(title, body):
     table{width:100%%;border-collapse:collapse;background:#fff;border:1px solid #dde1e7} th,td{text-align:left;padding:10px;border-bottom:1px solid #e8ebef;vertical-align:top}
     td span{display:block;color:#667085;font-size:13px;margin-top:3px}.actions{display:flex;gap:6px;flex-wrap:wrap}
     form{margin:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;background:#fff;border:1px solid #dde1e7;padding:16px}
+    .policy{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.policy input{width:96px}.policy select{font:inherit;padding:9px;border:1px solid #b9c0cb;border-radius:6px}
     label{display:flex;flex-direction:column;font-size:13px;font-weight:650;gap:5px}.check{flex-direction:row;align-items:center;margin-top:22px}
     input,textarea{font:inherit;padding:9px;border:1px solid #b9c0cb;border-radius:6px}textarea{min-height:72px}.wide{grid-column:1/-1}
     button{font:inherit;font-weight:700;padding:8px 12px;border:1px solid #9aa3af;border-radius:6px;background:#fff;cursor:pointer}.danger{border-color:#c2410c;color:#9a3412}
@@ -363,3 +477,7 @@ def _split_lines(value):
 
 def _e(value):
     return html.escape(str(value), quote=True)
+
+
+def _secret_placeholder(value):
+    return "leave blank to keep existing" if value else ""

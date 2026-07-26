@@ -44,7 +44,27 @@ Log in from a browser, then add each OSCam running on that VPS with:
 - WebIF host and port, usually `127.0.0.1` plus that OSCam WebIF port
 - WebIF username/password, blank for open WebIF
 - OSCam config directory containing `oscam.user`
-- ECM/min limit, strike count, poll interval, and auto-stop switch
+- ECM/min limit, strike count, poll interval, global notify, global auto-stop, and Telegram settings
+
+After saving an OSCam, press **Sync now**. That button performs one live WebIF poll for that OSCam,
+reads local `oscam.user` accounts from the configured path, updates the state table, evaluates strike
+rules, sends notifications when configured, and stops users only when the matching global or per-user
+policy allows stopping.
+
+Each discovered user appears automatically with policy controls:
+
+- `Use global`: inherit the OSCam global max ECM, notify, and auto-stop settings
+- `Notify only`: alert when the user reaches the strike threshold, never auto-stop
+- `Stop`: auto-stop this user at threshold even if global auto-stop is off
+- `Ignore`: keep the user visible but never auto-stop
+- user max ECM/min override: blank inherits the OSCam global max
+
+Telegram notifications require:
+
+- Telegram bot token
+- admin chat ID
+- Telegram enabled
+- Notify enabled globally, or a user policy set to `Notify only` / `Stop`
 
 ## Commands
 
@@ -83,9 +103,11 @@ Main settings per instance in `/etc/reshare-control/config.json`:
 - `max_ecm_per_min`: global ECM/min threshold, default `20`
 - `strike_count`: consecutive over-limit cycles before flagging, default `3`
 - `auto_stop_enabled`: enforcement master switch, default `false`
+- `notify_enabled`: global notification switch, default `true`
+- `telegram_enabled`, `telegram_bot_token`, `telegram_chat_id`: Telegram delivery settings
 - `base_path`: directory containing `oscam.user`, default `/usr/local/etc`
 - `poll_interval_min`: schedule cadence, default `5`
-- `exempt_users`: usernames that are evaluated but never auto-stopped
+- `user_policies`: per-user action and optional max ECM/min override
 
 Per-instance state and audit files are stored under:
 
