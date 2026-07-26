@@ -73,6 +73,8 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 return self._disable_user(form)
             if parsed.path == "/users/enable":
                 return self._enable_user(form)
+            if parsed.path == "/users/reset":
+                return self._reset_user(form)
             if parsed.path == "/users/exempt":
                 return self._set_exempt(form, True)
             if parsed.path == "/users/unexempt":
@@ -183,12 +185,13 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                   <select name="action">
                     %s
                   </select>
-                  <button>Save</button>
+                  <button>Save policy</button>
                 </form>
               </td>
               <td class="actions">
-                <form method="post" action="/users/disable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button class="danger">Disable</button></form>
-                <form method="post" action="/users/enable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>Enable</button></form>
+                <form method="post" action="/users/reset"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>Reset flag</button></form>
+                <form method="post" action="/users/disable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button class="danger">Disable account</button></form>
+                <form method="post" action="/users/enable"><input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s"><button>Enable account</button></form>
               </td>
             </tr>
             """ % (
@@ -202,6 +205,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 _e(instance.id), _e(username), instance.max_ecm_per_min, _e(max_value),
                 instance.stop_duration_min, _e(_policy_duration_value(policy)),
                 _action_options(policy.action),
+                _e(instance.id), _e(username),
                 _e(instance.id), _e(username), _e(instance.id), _e(username),
             ))
         body = """
@@ -339,6 +343,21 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
         store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
         enable_account(instance, store.config_dir, _first(form, "user"), store)
+        return self._redirect("/instance/%s" % instance.id)
+
+    def _reset_user(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        username = _first(form, "user")
+        store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
+        with store.locked():
+            state = store.load()
+            current = state.get_user(username) or UserStrikeState()
+            current.consecutive_strikes = 0
+            current.status = "ok"
+            current.stopped_until = None
+            state.set_user(username, current)
+            store.save(state)
         return self._redirect("/instance/%s" % instance.id)
 
     def _set_exempt(self, form, exempt):
