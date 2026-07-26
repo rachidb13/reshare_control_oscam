@@ -21,6 +21,7 @@ from .config import (
     verify_password,
 )
 from .enforce import EnforcementError, enable_account, list_account_users, stop_account
+from .notify import TelegramNotifier
 from .poller import run_cycle
 from .state import StateStore, UserStrikeState
 from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
@@ -66,6 +67,8 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 return self._redirect("/")
             if parsed.path == "/instances/run":
                 return self._run_instance(form)
+            if parsed.path == "/instances/test-telegram":
+                return self._test_telegram(form)
             if parsed.path == "/users/disable":
                 return self._disable_user(form)
             if parsed.path == "/users/enable":
@@ -119,6 +122,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
               <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td class="actions">
                 <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
+                <form method="post" action="/instances/test-telegram"><input type="hidden" name="id" value="%s"><button>Test Telegram</button></form>
                 <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
               </td>
             </tr>
@@ -128,7 +132,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 "on" if instance.auto_stop_enabled else "off",
                 "on" if instance.telegram_enabled else "off",
                 "%s / %s" % (flagged, stopped),
-                _e(instance.id), _e(instance.id),
+                _e(instance.id), _e(instance.id), _e(instance.id),
             ))
         body = """
         <section class="toolbar">
@@ -190,8 +194,9 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         body = """
         <section class="toolbar">
           <div><a href="/">Back</a><h1>%s</h1><p>%s:%s · %s</p></div>
-          <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
+          %s
         </section>
+        %s
         <section>
           <h2>Users</h2>
           <table>
@@ -199,12 +204,11 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             <tbody>%s</tbody>
           </table>
         </section>
-        %s
         """ % (
             _e(instance.name), _e(instance.host), instance.port, _e(instance.base_path),
-            _e(instance.id),
-            "".join(rows) or "<tr><td colspan='6'>No state yet. Run this instance once.</td></tr>",
+            _instance_toolbar(instance),
             _instance_form(instance),
+            "".join(rows) or "<tr><td colspan='8'>No state yet. Run this instance once.</td></tr>",
         )
         self._send_html(_page(instance.name, body))
 
@@ -273,6 +277,19 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             _e(", ".join(result.stopped_users) or "none"),
             _e(instance.id),
         )))
+
+    def _test_telegram(self, form):
+        app = load_app_config(self.app_config_dir)
+        instance = app.get_instance(sanitize_instance_id(_first(form, "id")))
+        result = TelegramNotifier().send_test(instance)
+        if result.ok:
+            message = "<p>Telegram test message sent for %s.</p>" % _e(instance.name)
+        else:
+            message = "<p class='error'>Telegram test failed: %s</p>" % _e(result.error)
+        return self._send_html(_page("Telegram test", """
+        %s
+        <p><a href="/instance/%s">Back to instance</a></p>
+        """ % (message, _e(instance.id))))
 
     def _disable_user(self, form):
         app = load_app_config(self.app_config_dir)
@@ -379,6 +396,15 @@ def _instance_form(instance=None):
         "checked" if instance.telegram_enabled else "",
         _secret_placeholder(instance.telegram_bot_token), _e(instance.telegram_chat_id),
     )
+
+
+def _instance_toolbar(instance):
+    return """
+    <div class="actions">
+      <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
+      <form method="post" action="/instances/test-telegram"><input type="hidden" name="id" value="%s"><button>Test Telegram</button></form>
+    </div>
+    """ % (_e(instance.id), _e(instance.id))
 
 
 def _exempt_button(instance, username, exempt):

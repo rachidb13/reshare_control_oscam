@@ -18,6 +18,19 @@ class TelegramNotifier(object):
         if not _telegram_ready(config):
             return NotificationResult(False, "telegram disabled or incomplete")
         text = _message(config, user, observed_ecm_min, threshold, action, stopped)
+        return self.send_text(config, text)
+
+    def send_test(self, config):
+        if not _telegram_ready(config):
+            return NotificationResult(False, "telegram disabled or incomplete")
+        return self.send_text(config, "\n".join([
+            "OSCAM Reshare Control: TEST",
+            "OSCam: %s" % config.name,
+            "WebIF: %s:%s" % (config.host, config.port),
+            "Telegram notifications are configured.",
+        ]))
+
+    def send_text(self, config, text):
         url = "https://api.telegram.org/bot%s/sendMessage" % config.telegram_bot_token
         payload = urlencode({
             "chat_id": config.telegram_chat_id,
