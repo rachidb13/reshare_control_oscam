@@ -275,6 +275,13 @@ else
     say "  $web_runner_cmd"
 fi
 
+if [ -n "${RC_LICENSE_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
+    say "Enrolling this VPS as a VPN node..."
+    run_python -m reshare_control --config-dir "$CONFIG_DIR" enroll-vpn || \
+        say "VPN enrollment did not complete — reshare-control itself is installed. See logs."
+    say "Reminder: allow UDP 51820 in the VPS firewall/security group for WireGuard."
+fi
+
 web_port=$(run_python - "$CONFIG_DIR" <<'PY'
 import sys
 from reshare_control.config import load_app_config
@@ -300,5 +307,6 @@ say "  systemctl status reshare-control-web.service"
 say "  systemctl status reshare-control.timer"
 say ""
 say "If the browser cannot connect, allow TCP port $web_port in the VPS firewall/security group."
+say "For VPN nodes, allow UDP port 51820 in the VPS firewall/security group."
 say "Public install command for GitHub README:"
 say "  $DEFAULT_PUBLIC_INSTALL"
