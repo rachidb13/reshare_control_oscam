@@ -50,7 +50,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         if parsed.path in ("", "/"):
             return self._render_index()
         if parsed.path.startswith("/instance/"):
-            return self._render_instance(parsed.path.rsplit("/", 1)[-1])
+            return self._render_instance(parsed.path.rsplit("/", 1)[-1], parsed.query)
         self._send_html("Not found", status=404)
 
     def do_POST(self):
@@ -121,6 +121,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
               <td><a href="/instance/%s">%s</a><span>%s:%s</span></td>
               <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td class="actions">
+                <a class="button" href="/instance/%s">Edit</a>
                 <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
                 <form method="post" action="/instances/test-telegram"><input type="hidden" name="id" value="%s"><button>Test Telegram</button></form>
                 <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
@@ -132,6 +133,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 "on" if instance.auto_stop_enabled else "off",
                 "on" if instance.telegram_enabled else "off",
                 "%s / %s" % (flagged, stopped),
+                _e(instance.id),
                 _e(instance.id), _e(instance.id), _e(instance.id),
             ))
         body = """
@@ -151,18 +153,22 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                _instance_form())
         self._send_html(_page("OSCAM Reshare Control", body))
 
-    def _render_instance(self, instance_id):
+    def _render_instance(self, instance_id, query=""):
         app = load_app_config(self.app_config_dir)
         instance = app.get_instance(sanitize_instance_id(instance_id))
         store = StateStore(instance_state_dir(self.app_config_dir, instance.id))
         state = store.load()
+        filters = parse_qs(query)
+        connected_only = _first(filters, "connected") == "1"
         rows = []
         for username, user_state in sorted(state.users.items()):
+            if connected_only and user_state.last_connected is not True:
+                continue
             policy = instance.policy_for(username)
             max_value = "" if policy.max_ecm_per_min is None else policy.max_ecm_per_min
             rows.append("""
             <tr>
-              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td>
                 <form method="post" action="/users/policy" class="policy">
                   <input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s">
@@ -183,6 +189,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 _e(username),
                 _e(user_state.last_observed_ecm_min if user_state.last_observed_ecm_min is not None else "NO_READING"),
                 user_state.consecutive_strikes,
+                _connected_label(user_state.last_connected),
                 _e(user_state.status),
                 _e(user_state.stopped_until or ""),
                 _e(policy.action),
@@ -199,8 +206,12 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         %s
         <section>
           <h2>Users</h2>
+          <div class="filters">
+            <a class="button %s" href="/instance/%s">All users</a>
+            <a class="button %s" href="/instance/%s?connected=1">Connected only</a>
+          </div>
           <table>
-            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Stopped until</th><th>Action</th><th>Policy</th><th></th></tr></thead>
+            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Connected</th><th>Status</th><th>Stopped until</th><th>Action</th><th>Policy</th><th></th></tr></thead>
             <tbody>%s</tbody>
           </table>
         </section>
@@ -208,7 +219,9 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             _e(instance.name), _e(instance.host), instance.port, _e(instance.base_path),
             _instance_toolbar(instance),
             _instance_form(instance),
-            "".join(rows) or "<tr><td colspan='8'>No state yet. Run this instance once.</td></tr>",
+            "active" if not connected_only else "", _e(instance.id),
+            "active" if connected_only else "", _e(instance.id),
+            "".join(rows) or "<tr><td colspan='9'>No users match this view. Run this instance once.</td></tr>",
         )
         self._send_html(_page(instance.name, body))
 
@@ -435,6 +448,14 @@ def _policy_duration_value(policy):
     return "" if policy.stop_duration_min is None else policy.stop_duration_min
 
 
+def _connected_label(value):
+    if value is True:
+        return "connected"
+    if value is False:
+        return "disconnected"
+    return "unknown"
+
+
 def _existing_policies(app, instance_id):
     try:
         return app.get_instance(instance_id).user_policies
@@ -458,7 +479,7 @@ def _sync_local_account_users(config_dir, instance):
     for username in users:
         instance.ensure_user_policy(username)
         if state.get_user(username) is None:
-            state.set_user(username, UserStrikeState())
+            state.set_user(username, UserStrikeState(last_connected=False))
     store.save(state)
     return users
 
@@ -498,7 +519,8 @@ def _page(title, body):
     .policy{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.policy input{width:96px}.policy select{font:inherit;padding:9px;border:1px solid #b9c0cb;border-radius:6px}
     label{display:flex;flex-direction:column;font-size:13px;font-weight:650;gap:5px}.check{flex-direction:row;align-items:center;margin-top:22px}
     input,textarea{font:inherit;padding:9px;border:1px solid #b9c0cb;border-radius:6px}textarea{min-height:72px}.wide{grid-column:1/-1}
-    button{font:inherit;font-weight:700;padding:8px 12px;border:1px solid #9aa3af;border-radius:6px;background:#fff;cursor:pointer}.danger{border-color:#c2410c;color:#9a3412}
+    button,.button{font:inherit;font-weight:700;padding:8px 12px;border:1px solid #9aa3af;border-radius:6px;background:#fff;cursor:pointer;display:inline-block}.button.active{background:#16181d;color:#fff}
+    .danger{border-color:#c2410c;color:#9a3412}.filters{display:flex;gap:8px;margin:0 0 10px}
     a{color:#0f5fb8;text-decoration:none}.error{color:#b42318;background:#fff0f0;border:1px solid #f4b4b4;padding:12px}
     </style></head><body>%s</body></html>""" % (_e(title), body)
 

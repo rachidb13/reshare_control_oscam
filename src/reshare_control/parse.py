@@ -25,11 +25,12 @@ class MonitoredUser(object):
     """Normalized user statistics record shared by parser, poller, and strike code."""
 
     def __init__(self, name, usermd5=None, disabled=False,
-                 ecm_per_min=NO_READING, raw_webif_stats=None):
+                 ecm_per_min=NO_READING, connected=None, raw_webif_stats=None):
         self.name = name
         self.usermd5 = usermd5
         self.disabled = bool(disabled)
         self.ecm_per_min = ecm_per_min
+        self.connected = connected
         self.raw_webif_stats = dict(raw_webif_stats or {})
 
     def to_dict(self):
@@ -40,6 +41,7 @@ class MonitoredUser(object):
             "disabled": self.disabled,
             "ecm_per_min": value,
             "ecm_per_min_is_no_reading": self.ecm_per_min is NO_READING,
+            "connected": self.connected,
             "raw_webif_stats": dict(self.raw_webif_stats),
         }
 
@@ -140,7 +142,8 @@ def normalize_userstats_body(body, userconfig_html=None):
             name=name,
             usermd5=usermd5,
             disabled=False,
-            ecm_per_min=to_number_or_no_reading(entry.get("total_ecm_min")),
+            ecm_per_min=_ecm_per_min(entry),
+            connected=_connected(entry),
             raw_webif_stats=_scalar_fields(entry),
         ))
     return users
@@ -206,6 +209,12 @@ def _unwrap_user_entry(entry):
 
 
 def _is_disabled(user):
+    classname = _string_or_none(user.get("classname"))
+    if classname and "disabled" in classname.lower():
+        return True
+    status = _string_or_none(user.get("status"))
+    if status and "disabled" in status.lower():
+        return True
     value = user.get("disabled")
     if isinstance(value, bool):
         return value
@@ -214,6 +223,47 @@ def _is_disabled(user):
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return False
+
+
+def _ecm_per_min(entry):
+    for key in ("total_ecm_min", "ecm_per_min", "n_requ_m"):
+        value = to_number_or_no_reading(entry.get(key))
+        if value is not NO_READING:
+            return value
+    stats = entry.get("stats")
+    if isinstance(stats, dict):
+        for key in ("n_requ_m", "total_ecm_min", "ecm_per_min", "cwrate"):
+            value = to_number_or_no_reading(stats.get(key))
+            if value is not NO_READING:
+                return value
+    return NO_READING
+
+
+def _connected(entry):
+    status = _string_or_none(entry.get("status"))
+    if status:
+        text = status.lower()
+        if "online" in text or "connected" in text:
+            return True
+        if "offline" in text or "disconnected" in text:
+            return False
+    classname = _string_or_none(entry.get("classname"))
+    if classname:
+        text = classname.lower()
+        if "online" in text or "connected" in text:
+            return True
+        if "offline" in text or "disabled" in text:
+            return False
+    connection = entry.get("connection")
+    if isinstance(connection, dict):
+        value = _string_or_none(connection.get("status") or connection.get("$"))
+        if value:
+            text = value.lower()
+            if "connected" in text or text == "ok":
+                return True
+            if "error" in text or "disconnected" in text:
+                return False
+    return None
 
 
 def _string_or_none(value):
@@ -239,7 +289,9 @@ def _usernames_by_md5(html):
         return {}
     result = {}
     for username in parser.usernames:
-        result[hashlib.md5(username.encode()).hexdigest()] = username
+        digest = hashlib.md5(username.encode()).hexdigest()
+        result[digest] = username
+        result["id_" + digest] = username
     return result
 
 

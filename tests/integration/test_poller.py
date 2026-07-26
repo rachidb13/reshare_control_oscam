@@ -61,6 +61,17 @@ def _user(name, ecm, disabled="0"):
     return data
 
 
+def _wrapped_md5_user(usermd5, ecm, status="online"):
+    return {
+        "user": {
+            "usermd5": usermd5,
+            "status": status,
+            "classname": status,
+            "stats": {"n_requ_m": str(ecm)},
+        },
+    }
+
+
 def _store(tmp_path, config):
     save_config(config, str(tmp_path))
     return StateStore(str(tmp_path))
@@ -237,6 +248,29 @@ def test_notify_only_user_policy_flags_and_notifies_without_stopping(tmp_path):
     assert result.users[0].threshold == 10.0
     assert result.users[0].action == "notify"
     assert notifier.messages[-1]["stopped"] is False
+
+
+def test_nested_userstats_rate_updates_connected_state(tmp_path):
+    config = _config(strike_count=1, base_path=str(tmp_path))
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([
+        json.dumps({"oscam": {"users": [_wrapped_md5_user("id_2c1743a391305fbf367df8e4f069f9f9", 44)]}}),
+        """<td class="usercol1" data-sort-value="alpha">alpha</td>""",
+    ])
+
+    result = run_cycle(
+        config,
+        store,
+        fetcher=fetcher,
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    state = store.load().get_user("alpha")
+    assert result.users[0].name == "alpha"
+    assert result.users[0].ecm_per_min == 44
+    assert result.users[0].connected is True
+    assert state.last_observed_ecm_min == 44
+    assert state.last_connected is True
 
 
 def test_stop_user_policy_can_stop_when_global_auto_stop_is_off(tmp_path):

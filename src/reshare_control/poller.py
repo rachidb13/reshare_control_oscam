@@ -13,7 +13,8 @@ from .webif import CurlFetcher, OK
 
 class CycleUserResult(object):
     def __init__(self, name, ecm_per_min, state, should_stop=False,
-                 threshold=None, action="global", notified=False):
+                 threshold=None, action="global", notified=False,
+                 connected=None):
         self.name = name
         self.ecm_per_min = ecm_per_min
         self.state = state
@@ -21,6 +22,7 @@ class CycleUserResult(object):
         self.threshold = threshold
         self.action = action
         self.notified = bool(notified)
+        self.connected = connected
 
     def to_dict(self):
         return {
@@ -33,6 +35,7 @@ class CycleUserResult(object):
             "threshold": self.threshold,
             "action": self.action,
             "notified": self.notified,
+            "connected": self.connected,
             "stopped_until": self.state.stopped_until,
         }
 
@@ -104,6 +107,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
                 continue
             if current is None:
                 current = UserStrikeState()
+            current.last_connected = monitored.connected
             effective = _effective_config(config, monitored.name)
             before_strikes = current.consecutive_strikes
             current.exempt = effective.policy.action == "ignore"
@@ -151,12 +155,14 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
                                          evaluation.should_stop,
                                          threshold=effective.max_ecm_per_min,
                                          action=effective.policy.action,
-                                         notified=notified))
+                                         notified=notified,
+                                         connected=monitored.connected))
 
         for name, current in sorted(state.users.items()):
             if name in seen or current.status == "stopped":
                 continue
             effective = _effective_config(config, name)
+            current.last_connected = False
             current.exempt = effective.policy.action == "ignore"
             evaluation = evaluate_strike(
                 NO_READING,

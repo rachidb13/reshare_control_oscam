@@ -26,6 +26,8 @@ def evaluate_strike(reading, state, config, evaluated_at=None, already_disabled=
             last_evaluated_at=when,
             status=current.status,
             exempt=exempt,
+            stopped_until=current.stopped_until,
+            last_connected=current.last_connected,
         )
         return StrikeEvaluation(new_state, False)
 
@@ -45,6 +47,8 @@ def evaluate_strike(reading, state, config, evaluated_at=None, already_disabled=
         last_evaluated_at=when,
         status=status,
         exempt=exempt,
+        stopped_until=current.stopped_until,
+        last_connected=current.last_connected,
     )
     should_stop = (
         config.auto_stop_enabled

@@ -1,4 +1,6 @@
 import os
+import hashlib
+import json
 
 from reshare_control.parse import NO_READING, normalize_userstats_body
 
@@ -60,3 +62,34 @@ def test_hidden_usermd5_resolves_to_alpha_not_idle_decoy():
     assert users[0].name == "alpha"
     assert users[0].usermd5 == "2c1743a391305fbf367df8e4f069f9f9"
     assert users[0].ecm_per_min == 24
+
+
+def test_oscam_users_shape_resolves_id_prefixed_md5_and_nested_ecm_rate():
+    username = "Amiretlgrm@0D97"
+    digest = hashlib.md5(username.encode()).hexdigest()
+    body = json.dumps({
+        "oscam": {
+            "users": [
+                {"user": {
+                    "usermd5": "id_%s" % digest,
+                    "status": "online",
+                    "classname": "online",
+                    "stats": {"n_requ_m": "347"},
+                }},
+                {"user": {
+                    "usermd5": "id_disabled",
+                    "status": "offline (disabled)",
+                    "classname": "disabled",
+                    "stats": {"n_requ_m": "99"},
+                }},
+            ],
+        },
+    })
+    html = '<td class="usercol1" data-sort-value="%s">%s</td>' % (username, username)
+
+    users = normalize_userstats_body(body, userconfig_html=html)
+
+    assert len(users) == 1
+    assert users[0].name == username
+    assert users[0].ecm_per_min == 347
+    assert users[0].connected is True

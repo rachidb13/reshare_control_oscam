@@ -20,13 +20,14 @@ class StateError(ValueError):
 class UserStrikeState(object):
     def __init__(self, consecutive_strikes=0, last_observed_ecm_min=None,
                  last_evaluated_at=None, status="ok", exempt=False,
-                 stopped_until=None):
+                 stopped_until=None, last_connected=None):
         self.consecutive_strikes = int(consecutive_strikes)
         self.last_observed_ecm_min = last_observed_ecm_min
         self.last_evaluated_at = last_evaluated_at
         self.status = status
         self.exempt = bool(exempt)
         self.stopped_until = stopped_until
+        self.last_connected = last_connected
         self.validate()
 
     @classmethod
@@ -38,6 +39,7 @@ class UserStrikeState(object):
             status=data.get("status", "ok"),
             exempt=data.get("exempt", False),
             stopped_until=data.get("stopped_until"),
+            last_connected=data.get("last_connected"),
         )
 
     def to_dict(self):
@@ -48,6 +50,7 @@ class UserStrikeState(object):
             "status": self.status,
             "exempt": self.exempt,
             "stopped_until": self.stopped_until,
+            "last_connected": self.last_connected,
         }
 
     def validate(self):
@@ -62,6 +65,8 @@ class UserStrikeState(object):
                 raise StateError("last_observed_ecm_min must be numeric or null")
         if self.stopped_until is not None and not isinstance(self.stopped_until, str):
             raise StateError("stopped_until must be an ISO-8601 string or null")
+        if self.last_connected is not None and not isinstance(self.last_connected, bool):
+            raise StateError("last_connected must be a boolean or null")
 
 
 class ReshareState(object):
