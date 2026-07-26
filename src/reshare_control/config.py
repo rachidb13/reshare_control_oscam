@@ -22,6 +22,7 @@ DEFAULTS = {
     "max_ecm_per_min": 20,
     "strike_count": 3,
     "auto_stop_enabled": False,
+    "stop_duration_min": 0,
     "notify_enabled": True,
     "telegram_enabled": False,
     "telegram_bot_token": "",
@@ -54,7 +55,8 @@ class InstanceConfig(object):
     def __init__(self, host, port, id="default", name="Default OSCam",
                  webif_user="", webif_pass="", base_path="/usr/local/etc",
                  max_ecm_per_min=20, strike_count=3,
-                 auto_stop_enabled=False, notify_enabled=True,
+                 auto_stop_enabled=False, stop_duration_min=0,
+                 notify_enabled=True,
                  telegram_enabled=False, telegram_bot_token="",
                  telegram_chat_id="", poll_interval_min=5,
                  request_timeout_s=5, exempt_users=None,
@@ -69,6 +71,7 @@ class InstanceConfig(object):
         self.max_ecm_per_min = max_ecm_per_min
         self.strike_count = strike_count
         self.auto_stop_enabled = auto_stop_enabled
+        self.stop_duration_min = stop_duration_min
         self.notify_enabled = notify_enabled
         self.telegram_enabled = telegram_enabled
         self.telegram_bot_token = telegram_bot_token
@@ -104,6 +107,7 @@ class InstanceConfig(object):
             "max_ecm_per_min": self.max_ecm_per_min,
             "strike_count": self.strike_count,
             "auto_stop_enabled": self.auto_stop_enabled,
+            "stop_duration_min": self.stop_duration_min,
             "notify_enabled": self.notify_enabled,
             "telegram_enabled": self.telegram_enabled,
             "telegram_bot_token": self.telegram_bot_token,
@@ -140,6 +144,9 @@ class InstanceConfig(object):
             raise ConfigError("strike_count must be at least 1")
         if not isinstance(self.auto_stop_enabled, bool):
             raise ConfigError("auto_stop_enabled must be a boolean")
+        self.stop_duration_min = _integer("stop_duration_min", self.stop_duration_min)
+        if self.stop_duration_min < 0:
+            raise ConfigError("stop_duration_min must be >= 0")
         if not isinstance(self.notify_enabled, bool):
             raise ConfigError("notify_enabled must be a boolean")
         if not isinstance(self.telegram_enabled, bool):
@@ -184,9 +191,11 @@ class InstanceConfig(object):
 
 
 class UserPolicy(object):
-    def __init__(self, max_ecm_per_min=None, action="global"):
+    def __init__(self, max_ecm_per_min=None, action="global",
+                 stop_duration_min=None):
         self.max_ecm_per_min = max_ecm_per_min
         self.action = action or "global"
+        self.stop_duration_min = stop_duration_min
         self.validate()
 
     @classmethod
@@ -196,12 +205,14 @@ class UserPolicy(object):
         return cls(
             max_ecm_per_min=(data or {}).get("max_ecm_per_min"),
             action=(data or {}).get("action", "global"),
+            stop_duration_min=(data or {}).get("stop_duration_min"),
         )
 
     def to_dict(self):
         return {
             "max_ecm_per_min": self.max_ecm_per_min,
             "action": self.action,
+            "stop_duration_min": self.stop_duration_min,
         }
 
     def validate(self):
@@ -213,6 +224,12 @@ class UserPolicy(object):
                 raise ConfigError("user max_ecm_per_min must be greater than 0")
         if self.action not in USER_ACTIONS:
             raise ConfigError("user action must be one of: %s" % ", ".join(sorted(USER_ACTIONS)))
+        if self.stop_duration_min in ("", None):
+            self.stop_duration_min = None
+        else:
+            self.stop_duration_min = _integer("user stop_duration_min", self.stop_duration_min)
+            if self.stop_duration_min < 0:
+                raise ConfigError("user stop_duration_min must be >= 0")
 
 
 class WebConfig(object):

@@ -61,7 +61,7 @@ def set_account_disabled(base_path, username, disabled):
 
 
 def stop_account(config, config_dir, username, user_state, observed_ecm_min,
-                 fetcher=None, timestamp=None):
+                 fetcher=None, timestamp=None, stopped_until=None):
     """Disable an account, reinit OSCAM, update state, and audit the stop."""
     when = timestamp or _utc_now()
     result = "ok"
@@ -73,6 +73,7 @@ def stop_account(config, config_dir, username, user_state, observed_ecm_min,
             result = "error:reinit:%s" % reinit_result.status
             raise EnforcementError(result)
         user_state.status = "stopped"
+        user_state.stopped_until = stopped_until
     except Exception as exc:
         result = "error:%s" % exc
         append_audit_record(
@@ -84,6 +85,7 @@ def stop_account(config, config_dir, username, user_state, observed_ecm_min,
             strike_count=user_state.consecutive_strikes,
             result=result,
             timestamp=when,
+            stopped_until=stopped_until,
         )
         raise
 
@@ -96,6 +98,7 @@ def stop_account(config, config_dir, username, user_state, observed_ecm_min,
         strike_count=user_state.consecutive_strikes,
         result=result,
         timestamp=when,
+        stopped_until=stopped_until,
     )
     return True
 
@@ -106,31 +109,25 @@ def enable_account(config, config_dir, username, store, fetcher=None, timestamp=
     with store.locked():
         state = store.load()
         previous = state.get_user(username) or UserStrikeState()
-        pre_reset_strikes = previous.consecutive_strikes
-        observed = previous.last_observed_ecm_min
-        set_account_disabled(config.base_path, username, False)
-        reinit_result = reinit(fetcher or config.base_url(), auth=config.auth(),
-                               timeout_s=config.request_timeout_s)
-        if reinit_result.status != OK:
-            append_audit_record(
-                config_dir,
-                action="reinstate",
-                user=username,
-                observed_ecm_min=observed,
-                threshold=config.max_ecm_per_min,
-                strike_count=pre_reset_strikes,
-                result="error:reinit:%s" % reinit_result.status,
-                timestamp=when,
-            )
-            raise EnforcementError("reinit failed: %s" % reinit_result.status)
-        state.set_user(username, UserStrikeState(
-            consecutive_strikes=0,
-            last_observed_ecm_min=observed,
-            last_evaluated_at=when,
-            status="ok",
-            exempt=username in config.exempt_users,
+        state.set_user(username, reinstate_account(
+            config, config_dir, username, previous,
+            fetcher=fetcher, timestamp=when,
         ))
         store.save(state)
+    return True
+
+
+def reinstate_account(config, config_dir, username, previous_state,
+                      fetcher=None, timestamp=None):
+    """Re-enable an account without taking a state lock."""
+    when = timestamp or _utc_now()
+    previous = previous_state or UserStrikeState()
+    pre_reset_strikes = previous.consecutive_strikes
+    observed = previous.last_observed_ecm_min
+    set_account_disabled(config.base_path, username, False)
+    reinit_result = reinit(fetcher or config.base_url(), auth=config.auth(),
+                           timeout_s=config.request_timeout_s)
+    if reinit_result.status != OK:
         append_audit_record(
             config_dir,
             action="reinstate",
@@ -138,14 +135,32 @@ def enable_account(config, config_dir, username, store, fetcher=None, timestamp=
             observed_ecm_min=observed,
             threshold=config.max_ecm_per_min,
             strike_count=pre_reset_strikes,
-            result="ok",
+            result="error:reinit:%s" % reinit_result.status,
             timestamp=when,
         )
-    return True
+        raise EnforcementError("reinit failed: %s" % reinit_result.status)
+    append_audit_record(
+        config_dir,
+        action="reinstate",
+        user=username,
+        observed_ecm_min=observed,
+        threshold=config.max_ecm_per_min,
+        strike_count=pre_reset_strikes,
+        result="ok",
+        timestamp=when,
+    )
+    return UserStrikeState(
+        consecutive_strikes=0,
+        last_observed_ecm_min=observed,
+        last_evaluated_at=when,
+        status="ok",
+        exempt=username in config.exempt_users,
+        stopped_until=None,
+    )
 
 
 def append_audit_record(config_dir, action, user, observed_ecm_min, threshold,
-                        strike_count, result, timestamp=None):
+                        strike_count, result, timestamp=None, stopped_until=None):
     directory = config_dir
     if not os.path.isdir(directory):
         os.makedirs(directory, 0o700)
@@ -158,6 +173,7 @@ def append_audit_record(config_dir, action, user, observed_ecm_min, threshold,
         "threshold": threshold,
         "strike_count": strike_count,
         "result": result,
+        "stopped_until": stopped_until,
     }
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:

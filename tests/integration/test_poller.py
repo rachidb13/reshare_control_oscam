@@ -268,6 +268,84 @@ pwd = one
     assert result.stopped_users == ["alpha"]
 
 
+def test_temporary_stop_sets_expiry_and_later_reenables(tmp_path):
+    config = _config(
+        strike_count=1,
+        auto_stop_enabled=True,
+        stop_duration_min=2,
+        base_path=str(tmp_path),
+    )
+    store = _store(tmp_path, config)
+    (tmp_path / "oscam.user").write_text("""[account]
+user = alpha
+pwd = one
+""")
+    stop_fetcher = FakeFetcher([
+        _body([_user("alpha", 25)]),
+        FetchResult(OK, body="ok", http_status=200),
+    ])
+
+    run_cycle(
+        config,
+        store,
+        fetcher=stop_fetcher,
+        notifier=FakeNotifier(),
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    stopped = store.load().get_user("alpha")
+    assert stopped.status == "stopped"
+    assert stopped.stopped_until == "2026-07-07T10:02:00Z"
+    assert "disabled = 1" in (tmp_path / "oscam.user").read_text()
+
+    enable_fetcher = FakeFetcher([
+        _body([]),
+        FetchResult(OK, body="ok", http_status=200),
+    ])
+    run_cycle(
+        config,
+        store,
+        fetcher=enable_fetcher,
+        notifier=FakeNotifier(),
+        evaluated_at="2026-07-07T10:03:00Z",
+    )
+
+    enabled = store.load().get_user("alpha")
+    assert enabled.status == "ok"
+    assert enabled.consecutive_strikes == 0
+    assert enabled.stopped_until is None
+    assert "disabled = 0" in (tmp_path / "oscam.user").read_text()
+
+
+def test_user_policy_stop_duration_overrides_global(tmp_path):
+    config = _config(
+        strike_count=1,
+        auto_stop_enabled=True,
+        stop_duration_min=10,
+        user_policies={"alpha": {"action": "global", "stop_duration_min": 2}},
+        base_path=str(tmp_path),
+    )
+    store = _store(tmp_path, config)
+    (tmp_path / "oscam.user").write_text("""[account]
+user = alpha
+pwd = one
+""")
+    fetcher = FakeFetcher([
+        _body([_user("alpha", 25)]),
+        FetchResult(OK, body="ok", http_status=200),
+    ])
+
+    run_cycle(
+        config,
+        store,
+        fetcher=fetcher,
+        notifier=FakeNotifier(),
+        evaluated_at="2026-07-07T10:00:00Z",
+    )
+
+    assert store.load().get_user("alpha").stopped_until == "2026-07-07T10:02:00Z"
+
+
 def test_ignore_user_policy_never_stops(tmp_path):
     config = _config(
         strike_count=1,

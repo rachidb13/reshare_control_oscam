@@ -22,6 +22,10 @@ config path that contains `oscam.user`.
 - User discovery MUST include local `oscam.user` accounts so inactive users appear even when WebIF
   active statistics returns zero users.
 - Per-user policy MUST allow an optional max ECM/min override.
+- Global and per-user policy MUST allow a stop duration in minutes; `0` means the user remains
+  stopped until manually enabled.
+- Scheduled monitoring MUST automatically re-enable temporarily stopped users once their stop
+  duration has expired.
 - Telegram notifications MUST include OSCam name, username, observed ECM/min, threshold, action, and
   whether the user was stopped.
 - Scheduled monitoring MUST run all configured OSCam instances.
@@ -34,5 +38,6 @@ config path that contains `oscam.user`.
 - Browser request with valid credentials renders the dashboard.
 - Adding an OSCam instance through the form persists it to config.
 - Syncing an OSCam discovers users and creates editable policy rows.
+- A user stopped for a configured duration is re-enabled by a later monitoring cycle after expiry.
 - `run-all` runs each configured instance independently.
 - Existing unit and integration tests continue passing.

@@ -65,7 +65,7 @@ def test_instance_config_round_trips_telegram_and_user_policies():
         telegram_bot_token="123:abc",
         telegram_chat_id="42",
         user_policies={
-            "alpha": {"action": "notify", "max_ecm_per_min": "12.5"},
+            "alpha": {"action": "notify", "max_ecm_per_min": "12.5", "stop_duration_min": "2"},
             "bravo": {"action": "ignore"},
         },
     )
@@ -77,6 +77,7 @@ def test_instance_config_round_trips_telegram_and_user_policies():
     assert loaded.telegram_bot_token == "123:abc"
     assert loaded.policy_for("alpha").action == "notify"
     assert loaded.policy_for("alpha").max_ecm_per_min == 12.5
+    assert loaded.policy_for("alpha").stop_duration_min == 2
     assert loaded.policy_for("bravo").action == "ignore"
 
 

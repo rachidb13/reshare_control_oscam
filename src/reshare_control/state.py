@@ -19,12 +19,14 @@ class StateError(ValueError):
 
 class UserStrikeState(object):
     def __init__(self, consecutive_strikes=0, last_observed_ecm_min=None,
-                 last_evaluated_at=None, status="ok", exempt=False):
+                 last_evaluated_at=None, status="ok", exempt=False,
+                 stopped_until=None):
         self.consecutive_strikes = int(consecutive_strikes)
         self.last_observed_ecm_min = last_observed_ecm_min
         self.last_evaluated_at = last_evaluated_at
         self.status = status
         self.exempt = bool(exempt)
+        self.stopped_until = stopped_until
         self.validate()
 
     @classmethod
@@ -35,6 +37,7 @@ class UserStrikeState(object):
             last_evaluated_at=data.get("last_evaluated_at"),
             status=data.get("status", "ok"),
             exempt=data.get("exempt", False),
+            stopped_until=data.get("stopped_until"),
         )
 
     def to_dict(self):
@@ -44,6 +47,7 @@ class UserStrikeState(object):
             "last_evaluated_at": self.last_evaluated_at,
             "status": self.status,
             "exempt": self.exempt,
+            "stopped_until": self.stopped_until,
         }
 
     def validate(self):
@@ -56,6 +60,8 @@ class UserStrikeState(object):
                 raise StateError("last_observed_ecm_min must be numeric or null")
             if not isinstance(self.last_observed_ecm_min, (int, float)):
                 raise StateError("last_observed_ecm_min must be numeric or null")
+        if self.stopped_until is not None and not isinstance(self.stopped_until, str):
+            raise StateError("stopped_until must be an ISO-8601 string or null")
 
 
 class ReshareState(object):

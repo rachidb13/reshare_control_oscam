@@ -1,8 +1,9 @@
 """One-cycle poll orchestration for detection."""
 
+from datetime import datetime, timedelta, timezone
 import json
 
-from .enforce import stop_account
+from .enforce import reinstate_account, stop_account
 from .notify import TelegramNotifier, should_notify
 from .parse import NO_READING, normalize_userstats_body
 from .state import UserStrikeState
@@ -32,6 +33,7 @@ class CycleUserResult(object):
             "threshold": self.threshold,
             "action": self.action,
             "notified": self.notified,
+            "stopped_until": self.state.stopped_until,
         }
 
 
@@ -72,6 +74,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
     def update(state):
         users = []
         stopped_users = []
+        _reenable_expired_stops(config, store, state, fetcher, evaluated_at, dry_run)
         if fetch.status != OK:
             for name, current in sorted(state.users.items()):
                 if current.status == "stopped":
@@ -114,6 +117,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
             evaluation.state.exempt = effective.policy.action == "ignore"
             stopped = False
             if evaluation.should_stop and not dry_run:
+                stopped_until = _stopped_until(effective, evaluated_at)
                 stop_account(
                     config,
                     store.config_dir,
@@ -122,6 +126,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
                     monitored.ecm_per_min,
                     fetcher=fetcher,
                     timestamp=evaluated_at,
+                    stopped_until=stopped_until,
                 )
                 stopped_users.append(monitored.name)
                 stopped = True
@@ -187,6 +192,11 @@ class _EffectiveConfig(object):
             else config.max_ecm_per_min
         )
         self.strike_count = config.strike_count
+        self.stop_duration_min = (
+            self.policy.stop_duration_min
+            if self.policy.stop_duration_min is not None
+            else config.stop_duration_min
+        )
         self.auto_stop_enabled = _effective_auto_stop(config, self.policy)
 
     def __getattr__(self, name):
@@ -205,6 +215,48 @@ def _effective_auto_stop(config, policy):
     if policy.action == "stop":
         return True
     return config.auto_stop_enabled
+
+
+def _stopped_until(config, evaluated_at):
+    if not config.stop_duration_min:
+        return None
+    return (_parse_time(evaluated_at) + timedelta(minutes=config.stop_duration_min)).isoformat().replace("+00:00", "Z")
+
+
+def _reenable_expired_stops(config, store, state, fetcher, evaluated_at, dry_run):
+    now = _parse_time(evaluated_at)
+    for username, user_state in list(state.users.items()):
+        if user_state.status != "stopped" or not user_state.stopped_until:
+            continue
+        if _parse_time(user_state.stopped_until) > now:
+            continue
+        if dry_run:
+            user_state.status = "ok"
+            user_state.consecutive_strikes = 0
+            user_state.stopped_until = None
+            state.set_user(username, user_state)
+            continue
+        state.set_user(username, reinstate_account(
+            config,
+            store.config_dir,
+            username,
+            user_state,
+            fetcher=fetcher,
+            timestamp=_format_time(now),
+        ))
+
+
+def _parse_time(value):
+    if value:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).astimezone(timezone.utc)
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _format_time(value):
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _needs_userconfig_retry(body, users):

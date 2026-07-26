@@ -115,10 +115,12 @@ pwd = one
         observed_ecm_min=27,
         fetcher=fetcher,
         timestamp="2026-07-07T10:00:00Z",
+        stopped_until="2026-07-07T10:02:00Z",
     )
 
     assert fetcher.requests == ["/userconfig.html?action=reinit"]
     assert state.status == "stopped"
+    assert state.stopped_until == "2026-07-07T10:02:00Z"
     audit = (tmp_path / AUDIT_FILENAME).read_text().strip()
     record = json.loads(audit)
     assert record["action"] == "stop"
@@ -127,6 +129,7 @@ pwd = one
     assert record["threshold"] == 20.0
     assert record["strike_count"] == 3
     assert record["result"] == "ok"
+    assert record["stopped_until"] == "2026-07-07T10:02:00Z"
 
 
 def test_enable_account_reenables_reinits_resets_state_and_audits(tmp_path):

@@ -45,6 +45,7 @@ Log in from a browser, then add each OSCam running on that VPS with:
 - WebIF username/password, blank for open WebIF
 - OSCam config directory containing `oscam.user`
 - ECM/min limit, strike count, poll interval, global notify, global auto-stop, and Telegram settings
+- stop duration in minutes; `0` means keep stopped until manually enabled
 
 After saving an OSCam, press **Sync now**. That button performs one live WebIF poll for that OSCam,
 reads local `oscam.user` accounts from the configured path, updates the state table, evaluates strike
@@ -58,6 +59,7 @@ Each discovered user appears automatically with policy controls:
 - `Stop`: auto-stop this user at threshold even if global auto-stop is off
 - `Ignore`: keep the user visible but never auto-stop
 - user max ECM/min override: blank inherits the OSCam global max
+- user stop duration override: blank inherits the OSCam global duration, `0` means permanent until manual enable
 
 Telegram notifications require:
 
@@ -103,11 +105,13 @@ Main settings per instance in `/etc/reshare-control/config.json`:
 - `max_ecm_per_min`: global ECM/min threshold, default `20`
 - `strike_count`: consecutive over-limit cycles before flagging, default `3`
 - `auto_stop_enabled`: enforcement master switch, default `false`
+- `stop_duration_min`: temporary stop duration; `0` means permanent until manual enable
 - `notify_enabled`: global notification switch, default `true`
 - `telegram_enabled`, `telegram_bot_token`, `telegram_chat_id`: Telegram delivery settings
 - `base_path`: directory containing `oscam.user`, default `/usr/local/etc`
 - `poll_interval_min`: schedule cadence, default `5`
 - `user_policies`: per-user action and optional max ECM/min override
+  plus optional stop duration override
 
 Per-instance state and audit files are stored under:
 

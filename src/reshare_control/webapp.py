@@ -116,7 +116,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             rows.append("""
             <tr>
               <td><a href="/instance/%s">%s</a><span>%s:%s</span></td>
-              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td class="actions">
                 <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
                 <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
@@ -158,11 +158,12 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             max_value = "" if policy.max_ecm_per_min is None else policy.max_ecm_per_min
             rows.append("""
             <tr>
-              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td>
                 <form method="post" action="/users/policy" class="policy">
                   <input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s">
                   <input name="max_ecm_per_min" type="number" step="0.1" min="0.1" placeholder="%s" value="%s">
+                  <input name="stop_duration_min" type="number" min="0" placeholder="%s" value="%s">
                   <select name="action">
                     %s
                   </select>
@@ -179,8 +180,10 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
                 _e(user_state.last_observed_ecm_min if user_state.last_observed_ecm_min is not None else "NO_READING"),
                 user_state.consecutive_strikes,
                 _e(user_state.status),
+                _e(user_state.stopped_until or ""),
                 _e(policy.action),
                 _e(instance.id), _e(username), instance.max_ecm_per_min, _e(max_value),
+                instance.stop_duration_min, _e(_policy_duration_value(policy)),
                 _action_options(policy.action),
                 _e(instance.id), _e(username), _e(instance.id), _e(username),
             ))
@@ -192,7 +195,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         <section>
           <h2>Users</h2>
           <table>
-            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Action</th><th>Policy</th><th></th></tr></thead>
+            <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Status</th><th>Stopped until</th><th>Action</th><th>Policy</th><th></th></tr></thead>
             <tbody>%s</tbody>
           </table>
         </section>
@@ -232,6 +235,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             max_ecm_per_min=_first(form, "max_ecm_per_min") or 20,
             strike_count=_first(form, "strike_count") or 3,
             auto_stop_enabled=_first(form, "auto_stop_enabled") == "1",
+            stop_duration_min=_first(form, "stop_duration_min") or 0,
             notify_enabled=_first(form, "notify_enabled") == "1",
             telegram_enabled=_first(form, "telegram_enabled") == "1",
             telegram_bot_token=telegram_bot_token,
@@ -312,6 +316,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         instance.user_policies[username] = UserPolicy(
             max_ecm_per_min=_first(form, "max_ecm_per_min"),
             action=_first(form, "action") or "global",
+            stop_duration_min=_first(form, "stop_duration_min"),
         ).to_dict()
         if username in instance.exempt_users:
             instance.exempt_users = [item for item in instance.exempt_users if item != username]
@@ -353,6 +358,7 @@ def _instance_form(instance=None):
         <label>OSCam config path<input name="base_path" required value="%s"></label>
         <label>Max ECM/min<input name="max_ecm_per_min" type="number" step="0.1" min="0.1" value="%s"></label>
         <label>Strike count<input name="strike_count" type="number" min="1" value="%s"></label>
+        <label>Stop duration minutes<input name="stop_duration_min" type="number" min="0" value="%s"></label>
         <label>Poll minutes<input name="poll_interval_min" type="number" min="1" value="%s"></label>
         <label>Timeout seconds<input name="request_timeout_s" type="number" min="1" value="%s"></label>
         <label class="check"><input name="auto_stop_enabled" type="checkbox" value="1" %s> Auto-stop</label>
@@ -367,7 +373,7 @@ def _instance_form(instance=None):
         "Edit OSCam" if instance.id else "Add OSCam",
         _e(instance.id), _e(instance.name), _e(instance.host), instance.port,
         _e(instance.webif_user), _secret_placeholder(instance.webif_pass), _e(instance.base_path),
-        instance.max_ecm_per_min, instance.strike_count, instance.poll_interval_min,
+        instance.max_ecm_per_min, instance.strike_count, instance.stop_duration_min, instance.poll_interval_min,
         instance.request_timeout_s, "checked" if instance.auto_stop_enabled else "",
         "checked" if instance.notify_enabled else "",
         "checked" if instance.telegram_enabled else "",
@@ -397,6 +403,10 @@ def _action_options(selected):
         )
         for value, label in labels
     )
+
+
+def _policy_duration_value(policy):
+    return "" if policy.stop_duration_min is None else policy.stop_duration_min
 
 
 def _existing_policies(app, instance_id):
@@ -437,6 +447,7 @@ class _EmptyInstance(object):
     base_path = "/usr/local/etc"
     max_ecm_per_min = 20
     strike_count = 3
+    stop_duration_min = 0
     poll_interval_min = 5
     request_timeout_s = 5
     auto_stop_enabled = False
