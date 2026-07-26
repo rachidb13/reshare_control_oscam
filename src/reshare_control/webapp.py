@@ -116,7 +116,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             rows.append("""
             <tr>
               <td><a href="/instance/%s">%s</a><span>%s:%s</span></td>
-              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
+              <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
               <td class="actions">
                 <form method="post" action="/instances/run"><input type="hidden" name="id" value="%s"><button>Sync now</button></form>
                 <form method="post" action="/instances/delete"><input type="hidden" name="id" value="%s"><button class="danger">Delete</button></form>
@@ -143,7 +143,7 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
           </table>
         </section>
         %s
-        """ % ("".join(rows) or "<tr><td colspan='6'>No OSCam instances configured yet.</td></tr>",
+        """ % ("".join(rows) or "<tr><td colspan='7'>No OSCam instances configured yet.</td></tr>",
                _instance_form())
         self._send_html(_page("OSCAM Reshare Control", body))
 
