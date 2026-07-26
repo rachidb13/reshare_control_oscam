@@ -40,7 +40,9 @@ def test_telegram_test_message_uses_saved_instance_settings(monkeypatch):
     assert captured["url"] == "https://api.telegram.org/bot123:abc/sendMessage"
     assert captured["timeout"] == 7
     assert captured["payload"]["chat_id"] == ["42"]
-    assert "OSCAM Reshare Control: TEST" in captured["payload"]["text"][0]
+    assert captured["payload"]["parse_mode"] == ["HTML"]
+    assert "<b>OSCAM Reshare Control</b>" in captured["payload"]["text"][0]
+    assert "<b>Status:</b> TEST MESSAGE" in captured["payload"]["text"][0]
     assert "Main OSCam" in captured["payload"]["text"][0]
     assert "127.0.0.1:1303" in captured["payload"]["text"][0]
 

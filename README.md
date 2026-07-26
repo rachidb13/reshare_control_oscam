@@ -1,130 +1,167 @@
 # OSCAM Reshare Control
 
-OSCAM Reshare Control installs a small web interface on a VPS. From the browser
-you can add one or more local OSCam instances, monitor WebIF ECM/min statistics,
-track sustained over-limit behavior, and optionally disable users that keep
-exceeding the configured threshold.
+Browser control panel for OSCam instances running on the same VPS.
 
-The default posture is detection only. Users are flagged after consecutive
-over-limit cycles, but nobody is disabled unless `auto_stop_enabled` is set to
-`true`.
+It reads local OSCam WebIF statistics, tracks ECM/min per user, sends Telegram
+alerts, and can temporarily disable users in `oscam.user` when they stay above
+your configured limit.
 
-## Install
+## One Command Install
 
-From a cloned checkout on the OSCAM VPS:
+Run this on the VPS that already has OSCam installed:
 
 ```sh
-sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh
 ```
 
-One copy-paste install from GitHub:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh \
-  | sudo RC_SOURCE_URL=https://github.com/<owner>/<repo>/archive/refs/heads/main.tar.gz sh
-```
-
-For this repository after merge to `main`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh \
-  | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh
-```
-
-The installer writes `/etc/reshare-control/config.json` with mode `0600`, starts
-the web interface, installs a scheduled monitor, and prints:
+The installer starts the web panel and prints:
 
 - browser URL, usually `http://SERVER_IP:8787/`
-- admin username
-- generated admin password
+- username: `admin`
+- generated password
 
-Log in from a browser, then add each OSCam running on that VPS with:
+If the browser cannot connect, allow TCP port `8787` in your VPS firewall or
+provider security group.
 
-- display name
-- WebIF host and port, usually `127.0.0.1` plus that OSCam WebIF port
-- WebIF username/password, blank for open WebIF
-- OSCam config directory containing `oscam.user`
-- ECM/min limit, strike count, poll interval, global notify, global auto-stop, and Telegram settings
-- stop duration in minutes; `0` means keep stopped until manually enabled
+## What It Does
 
-After saving an OSCam, press **Sync now**. That button performs one live WebIF poll for that OSCam,
-reads local `oscam.user` accounts from the configured path, updates the state table, evaluates strike
-rules, sends notifications when configured, and stops users only when the matching global or per-user
-policy allows stopping.
+- Add multiple OSCam WebIF instances from one panel
+- Read users automatically from the local OSCam `oscam.user`
+- Show connected, disconnected, flagged, and stopped users
+- Set a global ECM/min policy for each OSCam
+- Override max ECM/min, action, and stop duration per user
+- Send Telegram alerts with OSCam name, username, observed ECM/min, limit, and action
+- Stop users temporarily, then re-enable them automatically after the timer expires
+- Keep an audit log under `/etc/reshare-control/instances/INSTANCE_ID/`
 
-Each discovered user appears automatically with policy controls:
+The default posture is detection only. Users are not disabled unless global
+auto-stop is enabled or a specific user policy is set to `Stop`.
 
-- `Use global`: inherit the OSCam global max ECM, notify, and auto-stop settings
-- `Notify only`: alert when the user reaches the strike threshold, never auto-stop
-- `Stop`: auto-stop this user at threshold even if global auto-stop is off
-- `Ignore`: keep the user visible but never auto-stop
-- user max ECM/min override: blank inherits the OSCam global max
-- user stop duration override: blank inherits the OSCam global duration, `0` means permanent until manual enable
+## First Setup
 
-Telegram notifications require:
+1. Open the URL printed by the installer.
+2. Log in with the generated admin password.
+3. Add an OSCam instance:
+   - WebIF host: usually `127.0.0.1`
+   - WebIF port: the OSCam WebIF port
+   - WebIF user/password: leave blank only if that WebIF is open
+   - OSCam config path: directory containing `oscam.user`, often `/usr/local/etc`
+4. Click `Sync now`.
+5. Configure global policy or per-user policy.
+
+## User Policies
+
+Each discovered user has its own policy row:
+
+- `Use global`: inherit global max ECM/min, notify, and auto-stop behavior
+- `Notify only`: send alert at threshold, never disable this user
+- `Stop`: disable this user at threshold, even when global auto-stop is off
+- `Ignore`: keep visible, but do not alert or stop
+
+Inputs:
+
+- `Max ECM/min`: blank means inherit global max
+- `Stop min`: blank means inherit global stop duration
+- `Stop min = 0`: keep disabled until manually enabled
+
+Alerts are sent when a user first reaches the strike threshold. The alert flag is
+reset when the user goes below limit, when you click `Reset flag`, or when a
+temporary stop expires and the user is enabled again.
+
+## Telegram
+
+In the OSCam edit form, add:
 
 - Telegram bot token
-- admin chat ID
+- Telegram admin chat ID
 - Telegram enabled
-- Notify enabled globally, or a user policy set to `Notify only` / `Stop`
+- Notify enabled
 
-## Commands
+Use `Test Telegram` to verify delivery before relying on alerts.
 
-Run one monitoring cycle for every configured OSCam:
+## Services
+
+Check the web panel:
+
+```sh
+systemctl status reshare-control-web.service
+```
+
+Check the active monitor timer:
+
+```sh
+systemctl status reshare-control.timer
+systemctl list-timers --all | grep reshare-control
+```
+
+Run all OSCam checks immediately:
 
 ```sh
 reshare-control --config-dir /etc/reshare-control run-all
 ```
 
-Run or show one instance:
-
-```sh
-reshare-control --config-dir /etc/reshare-control run --instance INSTANCE_ID
-reshare-control --config-dir /etc/reshare-control status --instance INSTANCE_ID
-```
-
 Start the web UI manually:
 
 ```sh
-reshare-control --config-dir /etc/reshare-control web
+reshare-control --config-dir /etc/reshare-control web --host 0.0.0.0 --port 8787
 ```
 
-Manual control:
+## Troubleshooting
 
-```sh
-reshare-control --config-dir /etc/reshare-control disable-user --instance INSTANCE_ID USER
-reshare-control --config-dir /etc/reshare-control enable-user --instance INSTANCE_ID USER
-reshare-control --config-dir /etc/reshare-control exempt-user --instance INSTANCE_ID USER
-reshare-control --config-dir /etc/reshare-control unexempt-user --instance INSTANCE_ID USER
+If the web page refuses connection:
+
+- confirm the service is running: `systemctl status reshare-control-web.service`
+- confirm the port is listening: `ss -ltnp | grep 8787`
+- allow TCP `8787` in firewall/security group
+
+If users show `NO_READING`:
+
+- click `Sync now`
+- confirm OSCam WebIF is reachable from the same VPS
+- confirm the WebIF user has permission to read user statistics
+- confirm the configured OSCam path contains the correct `oscam.user`
+
+If stopping does not work:
+
+- confirm the app runs on the same VPS as OSCam
+- confirm the configured path points to the active `oscam.user`
+- confirm the process has permission to edit that file
+- confirm the user policy action is `Stop` or global auto-stop is enabled
+
+## Configuration Files
+
+Main config:
+
+```text
+/etc/reshare-control/config.json
 ```
 
-## Configuration
-
-Main settings per instance in `/etc/reshare-control/config.json`:
-
-- `max_ecm_per_min`: global ECM/min threshold, default `20`
-- `strike_count`: consecutive over-limit cycles before flagging, default `3`
-- `auto_stop_enabled`: enforcement master switch, default `false`
-- `stop_duration_min`: temporary stop duration; `0` means permanent until manual enable
-- `notify_enabled`: global notification switch, default `true`
-- `telegram_enabled`, `telegram_bot_token`, `telegram_chat_id`: Telegram delivery settings
-- `base_path`: directory containing `oscam.user`, default `/usr/local/etc`
-- `poll_interval_min`: schedule cadence, default `5`
-- `user_policies`: per-user action and optional max ECM/min override
-  plus optional stop duration override
-
-Per-instance state and audit files are stored under:
+Per-instance state and audit:
 
 ```text
 /etc/reshare-control/instances/INSTANCE_ID/
 ```
 
 When enforcement is enabled, the tool edits only the matching `[account]` block
-in `oscam.user`, applies `GET /userconfig.html?action=reinit`, and appends audit
-records to `/etc/reshare-control/audit.log`.
+in `oscam.user`, applies `GET /userconfig.html?action=reinit`, and writes an
+audit record.
+
+## Development
+
+Run the dev web panel:
+
+```sh
+PYTHONPATH=src python3 -m reshare_control --config-dir /tmp/reshare-control-web-dev web --host 0.0.0.0 --port 8787
+```
+
+Run tests:
+
+```sh
+PYTHONPATH=src pytest
+```
 
 ## Spec Kit
 
-The project keeps its Spec Kit artifacts in `.specify/` and the feature spec in
-`specs/001-oscam-reshare-control/`. Use feature branches for new work and keep
-the spec, plan, tasks, and implementation changes together.
+Spec Kit artifacts are kept in `.specify/` and feature specs are under `specs/`.
+Use a feature branch for each new change and keep spec, plan, tasks, and code
+together.

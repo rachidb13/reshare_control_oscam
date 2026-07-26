@@ -7,6 +7,7 @@ SYSTEMD_DIR=${RC_SYSTEMD_DIR:-/etc/systemd/system}
 CRON_MARKER="# reshare-control"
 SOURCE_URL=${RC_SOURCE_URL:-}
 INSTALL_DIR=${RC_INSTALL_DIR:-/opt/reshare-control}
+DEFAULT_PUBLIC_INSTALL="curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)
 source_dir=
@@ -293,3 +294,11 @@ if [ -n "$admin_password" ]; then
 else
     say "Password: existing password in $CONFIG_DIR/config.json"
 fi
+say ""
+say "Services:"
+say "  systemctl status reshare-control-web.service"
+say "  systemctl status reshare-control.timer"
+say ""
+say "If the browser cannot connect, allow TCP port $web_port in the VPS firewall/security group."
+say "Public install command for GitHub README:"
+say "  $DEFAULT_PUBLIC_INSTALL"

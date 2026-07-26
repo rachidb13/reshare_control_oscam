@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import json
+from html import escape
 from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 
@@ -24,9 +25,11 @@ class TelegramNotifier(object):
         if not _telegram_ready(config):
             return NotificationResult(False, "telegram disabled or incomplete")
         return self.send_text(config, "\n".join([
-            "OSCAM Reshare Control: TEST",
-            "OSCam: %s" % config.name,
-            "WebIF: %s:%s" % (config.host, config.port),
+            "🟦 <b>OSCAM Reshare Control</b>",
+            "<b>Status:</b> TEST MESSAGE",
+            "<b>OSCam:</b> %s" % _h(config.name),
+            "<b>WebIF:</b> %s:%s" % (_h(config.host), _h(config.port)),
+            "",
             "Telegram notifications are configured.",
         ]))
 
@@ -35,6 +38,7 @@ class TelegramNotifier(object):
         payload = urlencode({
             "chat_id": config.telegram_chat_id,
             "text": text,
+            "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }).encode("utf-8")
         request = Request(url, data=payload)
@@ -68,12 +72,20 @@ def _telegram_ready(config):
 
 
 def _message(config, user, observed_ecm_min, threshold, action, stopped):
+    icon = "🔴" if stopped else "🟠"
     state = "STOPPED" if stopped else "FLAGGED"
+    action_label = "Stop user" if action == "stop" else "Notify only" if action == "notify" else action
     return "\n".join([
-        "OSCAM Reshare Control: %s" % state,
-        "OSCam: %s" % config.name,
-        "User: %s" % user,
-        "Observed ECM/min: %s" % observed_ecm_min,
-        "Limit ECM/min: %s" % threshold,
-        "Action: %s" % action,
+        "%s <b>OSCAM Reshare Control</b>" % icon,
+        "<b>Status:</b> %s" % state,
+        "",
+        "<b>OSCam:</b> %s" % _h(config.name),
+        "<b>User:</b> <code>%s</code>" % _h(user),
+        "<b>Observed ECM/min:</b> <code>%s</code>" % _h(observed_ecm_min),
+        "<b>Limit ECM/min:</b> <code>%s</code>" % _h(threshold),
+        "<b>Action:</b> %s" % _h(action_label),
     ])
+
+
+def _h(value):
+    return escape(str(value), quote=False)
