@@ -7,7 +7,7 @@ SYSTEMD_DIR=${RC_SYSTEMD_DIR:-/etc/systemd/system}
 CRON_MARKER="# reshare-control"
 SOURCE_URL=${RC_SOURCE_URL:-}
 INSTALL_DIR=${RC_INSTALL_DIR:-/opt/reshare-control}
-DEFAULT_PUBLIC_INSTALL="curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh"
+DEFAULT_PUBLIC_INSTALL="curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/master/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/master.tar.gz sh"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)
 source_dir=

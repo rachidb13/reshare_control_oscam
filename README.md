@@ -11,7 +11,7 @@ your configured limit.
 Run this on the VPS that already has OSCam installed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/main/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/main.tar.gz sh
+curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/master/install.sh | sudo RC_SOURCE_URL=https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/master.tar.gz sh
 ```
 
 The installer starts the web panel and prints:
