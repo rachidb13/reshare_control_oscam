@@ -160,9 +160,15 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         state = store.load()
         filters = parse_qs(query)
         connected_only = _first(filters, "connected") == "1"
+        special_only = _first(filters, "special") == "1"
+        search = _first(filters, "q")
         rows = []
         for username, user_state in sorted(state.users.items()):
             if connected_only and user_state.last_connected is not True:
+                continue
+            if special_only and not _has_special_policy(instance, username):
+                continue
+            if search and search.lower() not in username.lower():
                 continue
             policy = instance.policy_for(username)
             max_value = "" if policy.max_ecm_per_min is None else policy.max_ecm_per_min
@@ -172,8 +178,8 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
               <td>
                 <form method="post" action="/users/policy" class="policy">
                   <input type="hidden" name="id" value="%s"><input type="hidden" name="user" value="%s">
-                  <input name="max_ecm_per_min" type="number" step="0.1" min="0.1" placeholder="%s" value="%s">
-                  <input name="stop_duration_min" type="number" min="0" placeholder="%s" value="%s">
+                  <label>Max ECM/min<input name="max_ecm_per_min" type="number" step="0.1" min="0.1" placeholder="%s" value="%s"></label>
+                  <label>Stop min<input name="stop_duration_min" type="number" min="0" placeholder="%s" value="%s"></label>
                   <select name="action">
                     %s
                   </select>
@@ -207,9 +213,16 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
         <section>
           <h2>Users</h2>
           <div class="filters">
-            <a class="button %s" href="/instance/%s">All users</a>
-            <a class="button %s" href="/instance/%s?connected=1">Connected only</a>
+            <a class="button %s" href="/instance/%s%s">All users</a>
+            <a class="button %s" href="/instance/%s?connected=1%s">Connected only</a>
+            <a class="button %s" href="/instance/%s?special=1%s">Special settings</a>
           </div>
+          <form method="get" action="/instance/%s" class="search">
+            %s
+            <input name="q" value="%s" placeholder="Search user">
+            <button>Search</button>
+            <a class="button" href="/instance/%s">Clear</a>
+          </form>
           <table>
             <thead><tr><th>User</th><th>Last ECM/min</th><th>Strikes</th><th>Connected</th><th>Status</th><th>Stopped until</th><th>Action</th><th>Policy</th><th></th></tr></thead>
             <tbody>%s</tbody>
@@ -219,8 +232,11 @@ class ReshareControlHandler(BaseHTTPRequestHandler):
             _e(instance.name), _e(instance.host), instance.port, _e(instance.base_path),
             _instance_toolbar(instance),
             _instance_form(instance),
-            "active" if not connected_only else "", _e(instance.id),
-            "active" if connected_only else "", _e(instance.id),
+            "active" if not connected_only and not special_only else "", _e(instance.id), _search_suffix(search),
+            "active" if connected_only else "", _e(instance.id), _search_suffix(search, separator="&"),
+            "active" if special_only else "", _e(instance.id), _search_suffix(search, separator="&"),
+            _e(instance.id), _filter_hidden_inputs(connected_only, special_only),
+            _e(search), _e(instance.id),
             "".join(rows) or "<tr><td colspan='9'>No users match this view. Run this instance once.</td></tr>",
         )
         self._send_html(_page(instance.name, body))
@@ -454,6 +470,32 @@ def _connected_label(value):
     if value is False:
         return "disconnected"
     return "unknown"
+
+
+def _has_special_policy(instance, username):
+    policy = instance.policy_for(username)
+    return (
+        policy.action != "global"
+        or policy.max_ecm_per_min is not None
+        or policy.stop_duration_min is not None
+    )
+
+
+def _search_suffix(search, separator="?"):
+    if not search:
+        return ""
+    from urllib.parse import quote_plus
+
+    return "%sq=%s" % (separator, quote_plus(search))
+
+
+def _filter_hidden_inputs(connected_only, special_only):
+    fields = []
+    if connected_only:
+        fields.append('<input type="hidden" name="connected" value="1">')
+    if special_only:
+        fields.append('<input type="hidden" name="special" value="1">')
+    return "".join(fields)
 
 
 def _existing_policies(app, instance_id):
