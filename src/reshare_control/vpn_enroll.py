@@ -195,7 +195,25 @@ def _error_reason(step, status, data, body):
 
 
 def _configure_wireguard(vpn, paths, runner, dry_run):
-    _run(runner, ["apt-get", "install", "-y", "wireguard", "wireguard-tools", "iptables"], dry_run)
+    # Run apt fully non-interactively so needrestart/kernel-upgrade dialogs never
+    # pause an unattended `curl | sudo sh` install. NEEDRESTART_MODE=a auto-restarts
+    # affected services (never the machine); the kernel reboot notice is suppressed.
+    _run(
+        runner,
+        [
+            "env",
+            "DEBIAN_FRONTEND=noninteractive",
+            "NEEDRESTART_MODE=a",
+            "NEEDRESTART_SUSPEND=1",
+            "apt-get",
+            "install",
+            "-y",
+            "wireguard",
+            "wireguard-tools",
+            "iptables",
+        ],
+        dry_run,
+    )
     _write_file(paths.sysctl_conf, "net.ipv4.ip_forward=1\n", 0o644, dry_run)
     _run(runner, ["sysctl", "-p", paths.sysctl_conf], dry_run)
     _mkdir(paths.wireguard_dir, 0o700, dry_run)
