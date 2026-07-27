@@ -6,15 +6,14 @@ PYTHON=${PYTHON:-python3}
 SYSTEMD_DIR=${RC_SYSTEMD_DIR:-/etc/systemd/system}
 CRON_MARKER="# reshare-control"
 # Baked-in defaults so the public install command is just the bare curl | sudo sh.
-# (Branch-pinned for now; flip these to master.tar.gz / master install.sh after merge.)
-SOURCE_URL=${RC_SOURCE_URL:-https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/003-vpn-node-enrollment.tar.gz}
+SOURCE_URL=${RC_SOURCE_URL:-https://github.com/rachidb13/reshare_control_oscam/archive/refs/heads/master.tar.gz}
 INSTALL_DIR=${RC_INSTALL_DIR:-/opt/reshare-control}
 # Fleet VPN enrollment defaults. Overridable via env; baked so no secrets need pasting.
 : "${RC_BOOTSTRAP_KEY:=kns-x_fFQMdEoiKFBLRQ9_6UBTMo9mAhsbgPXrrUTXBBfY4}"
 export RC_BOOTSTRAP_KEY
 : "${RC_OSCAM_CHECKER_URL:=https://github.com/rachidb13/oscam-checker/releases/latest/download/oscam-checker}"
 export RC_OSCAM_CHECKER_URL
-DEFAULT_PUBLIC_INSTALL="curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/003-vpn-node-enrollment/install.sh | sudo sh"
+DEFAULT_PUBLIC_INSTALL="curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/master/install.sh | sudo sh"
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)
 source_dir=
