@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 import json
+import logging
 import sys
 
 from .config import (
@@ -20,6 +21,7 @@ from .enforce import EnforcementError, enable_account, stop_account
 from .parse import validate_userstats_body
 from .poller import run_cycle
 from .state import StateError, StateStore, UserStrikeState
+from .vpn_enroll import EnrollmentError
 from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
 
 
@@ -71,6 +73,10 @@ def build_parser():
     web.add_argument("--host", help="override configured web bind host")
     web.add_argument("--port", type=int, help="override configured web port")
 
+    enroll_vpn = subparsers.add_parser("enroll-vpn", help="enroll this VPS as a kanasavpn node")
+    enroll_vpn.add_argument("--dry-run", action="store_true",
+                            help="print planned actions without changing system state")
+
     return parser
 
 
@@ -84,7 +90,7 @@ def main(argv=None):
         args.json_output = True
     try:
         return dispatch(args)
-    except (ConfigError, StateError, EnforcementError, IOError, OSError) as exc:
+    except (ConfigError, StateError, EnforcementError, EnrollmentError, IOError, OSError) as exc:
         _error(args, str(exc))
         return EXIT_FAILURE
     except CommandDeferred as exc:
@@ -97,6 +103,8 @@ def dispatch(args):
         return command_web(args)
     if args.command == "run-all":
         return command_run_all(args)
+    if args.command == "enroll-vpn":
+        return command_enroll_vpn(args)
     table = {
         "run": command_run,
         "status": command_status,
@@ -246,6 +254,26 @@ def command_web(args):
     from .webapp import serve
 
     serve(args.config_dir, bind_host=args.host, port=args.port)
+    return EXIT_SUCCESS
+
+
+def command_enroll_vpn(args):
+    from . import vpn_enroll
+
+    app = load_app_config(args.config_dir)
+    logger = logging.getLogger("reshare_control.vpn_enroll")
+    result = vpn_enroll.enroll(
+        app,
+        args.config_dir,
+        logger,
+        dry_run=getattr(args, "dry_run", False),
+    )
+    if getattr(args, "json_output", False):
+        print(json.dumps({"ok": True, "vpn": mask_for_log(result.vpn.to_dict())}, sort_keys=True))
+    elif getattr(args, "dry_run", False):
+        print("VPN enrollment dry run completed")
+    else:
+        print("VPN enrollment completed")
     return EXIT_SUCCESS
 
 

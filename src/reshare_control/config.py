@@ -1,5 +1,6 @@
 """Configuration loading, validation, persistence, and safe log masking."""
 
+from dataclasses import dataclass
 import hashlib
 import hmac
 import json
@@ -40,7 +41,30 @@ WEB_DEFAULTS = {
     "admin_password_hash": "",
 }
 
-SECRET_FIELDS = set(["webif_pass", "admin_password_hash", "telegram_bot_token"])
+DEFAULT_WG_API_URL = "https://admin.kanasavpn.com/api/wg"
+DEFAULT_OSCAM_CHECKER_BINARY_URL = "SET_RC_OSCAM_CHECKER_URL"
+
+VPN_DEFAULTS = {
+    "enabled": False,
+    "bootstrap_key": "",
+    "agent_id": "",
+    "wg_api_url": DEFAULT_WG_API_URL,
+    "oscam_checker_binary_url": DEFAULT_OSCAM_CHECKER_BINARY_URL,
+    "server_key": "",
+    "wg_port": None,
+    "wg_subnet": "",
+    "wg_listen_port": 51820,
+    "status": "",
+    "enrolled_at": "",
+}
+
+SECRET_FIELDS = set([
+    "webif_pass",
+    "admin_password_hash",
+    "telegram_bot_token",
+    "bootstrap_key",
+    "server_key",
+])
 USERNAME_FIELDS = set(["webif_user", "admin_user"])
 USER_ACTIONS = set(["global", "notify", "stop", "ignore"])
 
@@ -267,10 +291,84 @@ class WebConfig(object):
             raise ConfigError("admin_password_hash must be a string")
 
 
+@dataclass
+class VpnConfig(object):
+    enabled: bool = False
+    bootstrap_key: str = ""
+    agent_id: str = ""
+    wg_api_url: str = DEFAULT_WG_API_URL
+    oscam_checker_binary_url: str = DEFAULT_OSCAM_CHECKER_BINARY_URL
+    server_key: str = ""
+    wg_port: object = None
+    wg_subnet: str = ""
+    wg_listen_port: int = 51820
+    status: str = ""
+    enrolled_at: str = ""
+
+    @classmethod
+    def from_dict(cls, data):
+        merged = dict(VPN_DEFAULTS)
+        merged.update(dict((key, value) for key, value in (data or {}).items() if key in VPN_DEFAULTS))
+        merged["bootstrap_key"] = os.environ.get("RC_BOOTSTRAP_KEY", merged.get("bootstrap_key") or "")
+        merged["wg_api_url"] = os.environ.get("RC_WG_API_URL", merged.get("wg_api_url") or DEFAULT_WG_API_URL)
+        merged["oscam_checker_binary_url"] = os.environ.get(
+            "RC_OSCAM_CHECKER_URL",
+            merged.get("oscam_checker_binary_url") or DEFAULT_OSCAM_CHECKER_BINARY_URL,
+        )
+        return cls(**merged)
+
+    def __post_init__(self):
+        self.validate()
+
+    def to_dict(self):
+        return {
+            "enabled": self.enabled,
+            "bootstrap_key": self.bootstrap_key,
+            "agent_id": self.agent_id,
+            "wg_api_url": self.wg_api_url,
+            "oscam_checker_binary_url": self.oscam_checker_binary_url,
+            "server_key": self.server_key,
+            "wg_port": self.wg_port,
+            "wg_subnet": self.wg_subnet,
+            "wg_listen_port": self.wg_listen_port,
+            "status": self.status,
+            "enrolled_at": self.enrolled_at,
+        }
+
+    def validate(self):
+        if not isinstance(self.enabled, bool):
+            raise ConfigError("vpn enabled must be a boolean")
+        for key in (
+            "bootstrap_key",
+            "agent_id",
+            "wg_api_url",
+            "oscam_checker_binary_url",
+            "server_key",
+            "wg_subnet",
+            "status",
+            "enrolled_at",
+        ):
+            if not isinstance(getattr(self, key), str):
+                raise ConfigError("vpn %s must be a string" % key)
+        if not self.wg_api_url:
+            raise ConfigError("vpn wg_api_url must be a non-empty string")
+        self.wg_api_url = self.wg_api_url.rstrip("/")
+        if self.wg_port in ("", None):
+            self.wg_port = None
+        else:
+            self.wg_port = _integer("vpn wg_port", self.wg_port)
+            if self.wg_port < 1 or self.wg_port > 65535:
+                raise ConfigError("vpn wg_port must be between 1 and 65535")
+        self.wg_listen_port = _integer("vpn wg_listen_port", self.wg_listen_port)
+        if self.wg_listen_port < 1 or self.wg_listen_port > 65535:
+            raise ConfigError("vpn wg_listen_port must be between 1 and 65535")
+
+
 class AppConfig(object):
-    def __init__(self, web=None, instances=None, version=2):
+    def __init__(self, web=None, instances=None, vpn=None, version=2):
         self.version = int(version)
         self.web = web if isinstance(web, WebConfig) else WebConfig.from_dict(web)
+        self.vpn = vpn if isinstance(vpn, VpnConfig) else VpnConfig.from_dict(vpn)
         self.instances = [
             item if isinstance(item, InstanceConfig) else InstanceConfig.from_dict(item)
             for item in (instances or [])
@@ -284,6 +382,7 @@ class AppConfig(object):
         return cls(
             version=(data or {}).get("version", 2),
             web=(data or {}).get("web", {}),
+            vpn=(data or {}).get("vpn", {}),
             instances=(data or {}).get("instances", []),
         )
 
@@ -291,6 +390,7 @@ class AppConfig(object):
         return {
             "version": self.version,
             "web": self.web.to_dict(),
+            "vpn": self.vpn.to_dict(),
             "instances": [instance.to_dict() for instance in self.instances],
         }
 
@@ -433,6 +533,8 @@ def mask_for_log(value):
     if isinstance(value, InstanceConfig):
         value = value.to_dict()
     if isinstance(value, WebConfig):
+        value = value.to_dict()
+    if isinstance(value, VpnConfig):
         value = value.to_dict()
     if isinstance(value, dict):
         masked = {}
