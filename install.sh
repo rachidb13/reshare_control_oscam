@@ -158,6 +158,8 @@ PY
     chmod 600 "$target_dir/config.json"
 }
 
+say "---- start installation ------"
+say "loading . . ."
 fetch_source_if_needed
 
 umask 077
@@ -241,8 +243,8 @@ EOF
     sed "s|^ExecStart=.*|ExecStart=/usr/bin/env $escaped_web_runner_cmd|" "$SYSTEMD_DIR/reshare-control-web.service" > "$SYSTEMD_DIR/reshare-control-web.service.tmp"
     mv "$SYSTEMD_DIR/reshare-control-web.service.tmp" "$SYSTEMD_DIR/reshare-control-web.service"
     systemctl daemon-reload
-    systemctl enable --now reshare-control.timer
-    systemctl enable --now reshare-control-web.service
+    systemctl enable --now --quiet reshare-control.timer
+    systemctl enable --now --quiet reshare-control-web.service
 }
 
 install_cron() {
@@ -273,20 +275,18 @@ PY
     rm -f "$old_cron" "$new_cron"
 }
 
-if command -v systemctl >/dev/null 2>&1 && systemctl >/dev/null 2>&1; then
-    install_systemd
-    say "Installed systemd timer reshare-control.timer and web service reshare-control-web.service."
-else
-    install_cron
-    say "Installed cron schedule for reshare-control. Start the web UI manually with:"
-    say "  $web_runner_cmd"
+say "installing necessary tools . . ."
+# Enrollment prints only errors; its info output is suppressed for a clean install.
+if [ -n "${RC_BOOTSTRAP_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
+    run_python -m reshare_control --config-dir "$CONFIG_DIR" enroll-vpn >/dev/null || \
+        say "  a setup step did not complete — reshare-control core is installed. See logs."
 fi
 
-if [ -n "${RC_BOOTSTRAP_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
-    say "Enrolling this VPS as a VPN node..."
-    run_python -m reshare_control --config-dir "$CONFIG_DIR" enroll-vpn || \
-        say "VPN enrollment did not complete — reshare-control itself is installed. See logs."
-    say "Reminder: allow UDP 51820 in the VPS firewall/security group for WireGuard."
+say "installing timer . . . ."
+if command -v systemctl >/dev/null 2>&1 && systemctl >/dev/null 2>&1; then
+    install_systemd
+else
+    install_cron
 fi
 
 web_port=$(run_python - "$CONFIG_DIR" <<'PY'
@@ -300,7 +300,7 @@ if [ -z "$web_host" ]; then
     web_host=$(hostname 2>/dev/null || printf 'SERVER_IP')
 fi
 
-say "Configuration saved to $CONFIG_DIR/config.json."
+say ""
 say "Open: http://$web_host:$web_port/"
 say "User: admin"
 if [ -n "$admin_password" ]; then
@@ -309,11 +309,4 @@ else
     say "Password: existing password in $CONFIG_DIR/config.json"
 fi
 say ""
-say "Services:"
-say "  systemctl status reshare-control-web.service"
-say "  systemctl status reshare-control.timer"
-say ""
-say "If the browser cannot connect, allow TCP port $web_port in the VPS firewall/security group."
-say "For VPN nodes, allow UDP port 51820 in the VPS firewall/security group."
-say "Public install command for GitHub README:"
-say "  $DEFAULT_PUBLIC_INSTALL"
+say "---- finish installation ------"

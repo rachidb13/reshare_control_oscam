@@ -213,9 +213,10 @@ def _configure_wireguard(vpn, paths, runner, dry_run):
             "iptables",
         ],
         dry_run,
+        capture=True,
     )
     _write_file(paths.sysctl_conf, "net.ipv4.ip_forward=1\n", 0o644, dry_run)
-    _run(runner, ["sysctl", "-p", paths.sysctl_conf], dry_run)
+    _run(runner, ["sysctl", "-p", paths.sysctl_conf], dry_run, capture=True)
     _mkdir(paths.wireguard_dir, 0o700, dry_run)
     if not os.path.exists(paths.wg_private_key):
         private_key = _generate_private_key(runner, dry_run)
@@ -234,7 +235,7 @@ def _configure_wireguard(vpn, paths, runner, dry_run):
             default_iface,
         )
         _write_file(paths.wg_conf, content, 0o600, dry_run)
-    _run(runner, ["systemctl", "enable", "--now", "wg-quick@wg0"], dry_run)
+    _run(runner, ["systemctl", "enable", "--now", "--quiet", "wg-quick@wg0"], dry_run)
 
 
 def _configure_checker(vpn, paths, runner, downloader, dry_run):
@@ -274,7 +275,7 @@ def _configure_checker(vpn, paths, runner, downloader, dry_run):
     ])
     _write_file(paths.checker_service, service, 0o644, dry_run)
     _run(runner, ["systemctl", "daemon-reload"], dry_run)
-    _run(runner, ["systemctl", "enable", "--now", "oscam-checker.service"], dry_run)
+    _run(runner, ["systemctl", "enable", "--now", "--quiet", "oscam-checker.service"], dry_run)
 
 
 def _generate_private_key(runner, dry_run):
