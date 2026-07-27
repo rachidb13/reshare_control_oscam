@@ -157,6 +157,60 @@ PY
     chmod 600 "$target_dir/config.json"
 }
 
+# Decide before touching disk whether this box can also run the VPN node.
+# WireGuard ships in-repo from Ubuntu 20.04 and Debian 11; older releases need a
+# PPA or dkms build, so there the core app installs alone and enrollment is
+# skipped. Non Debian-family systems have no apt-get and are refused outright.
+MIN_WIREGUARD_UBUNTU=20.04
+MIN_WIREGUARD_DEBIAN=11
+
+# Numeric rank for "MAJOR" or "MAJOR.MINOR", leading zeros stripped so "04" is
+# not read as octal in shell arithmetic.
+version_rank() {
+    vr_major=${1%%.*}
+    vr_minor=${1#*.}
+    vr_minor=${vr_minor%%.*}
+    [ "$vr_minor" = "$1" ] && vr_minor=0
+    vr_major=$(printf '%s' "$vr_major" | sed 's/^0*\([0-9]\)/\1/')
+    vr_minor=$(printf '%s' "$vr_minor" | sed 's/^0*\([0-9]\)/\1/')
+    case $vr_major$vr_minor in
+        *[!0-9]*|"") printf '0' ;;
+        *) printf '%s' $((vr_major * 100 + vr_minor)) ;;
+    esac
+}
+
+check_supported_os() {
+    if [ "${RC_SKIP_OS_CHECK:-0}" = "1" ]; then
+        return
+    fi
+    os_id=""
+    os_version=""
+    os_name="unknown"
+    if [ -r /etc/os-release ]; then
+        os_id=$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")
+        os_version=$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_ID:-}")
+        os_name=$(. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-unknown}")
+    fi
+    case $os_id in
+        ubuntu) min_version=$MIN_WIREGUARD_UBUNTU ;;
+        debian) min_version=$MIN_WIREGUARD_DEBIAN ;;
+        *)
+            say "Unsupported system: $os_name"
+            say "This installer supports Ubuntu and Debian."
+            say "It installs WireGuard with apt-get, so other distributions will not work."
+            exit 1
+            ;;
+    esac
+    # Too old for stock WireGuard, or an unnumbered rolling release: install the
+    # core app only and leave VPN enrollment off. Kept silent by design.
+    if [ "$(version_rank "$os_version")" -lt "$(version_rank "$min_version")" ]; then
+        RC_SKIP_VPN=1
+        export RC_SKIP_VPN
+    fi
+}
+
+check_supported_os
+
 say "---- start installation ------"
 say "loading . . ."
 fetch_source_if_needed

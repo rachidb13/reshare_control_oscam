@@ -6,6 +6,28 @@ It reads local OSCam WebIF statistics, tracks ECM/min per user, sends Telegram
 alerts, and can temporarily disable users in `oscam.user` when they stay above
 your configured limit.
 
+## Requirements
+
+- Ubuntu or Debian
+- OSCam already installed on the same VPS, with its WebIF enabled
+- root access
+
+The installer checks the release before changing anything:
+
+| Release | Result |
+| --- | --- |
+| Ubuntu 20.04+, Debian 11+ | Control panel and VPN node enrollment |
+| Older Ubuntu or Debian | Control panel only, VPN enrollment skipped |
+| Anything else | Refused, nothing is installed |
+
+WireGuard ships in the standard repositories from Ubuntu 20.04 and Debian 11.
+On older releases it needs a PPA or a dkms build, so the panel installs on its
+own there and the node is not enrolled into the VPN fleet. Other distributions
+are refused because enrollment installs WireGuard with `apt-get`.
+
+Pass `RC_SKIP_VPN=1` to install the panel alone on any release, or
+`RC_SKIP_OS_CHECK=1` to bypass the check entirely.
+
 ## One Command Install
 
 Run this on the VPS that already has OSCam installed:
