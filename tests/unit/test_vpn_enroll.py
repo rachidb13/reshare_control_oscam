@@ -9,7 +9,6 @@ from reshare_control.vpn_enroll import (
     EnrollmentError,
     enroll,
     render_wg0_conf,
-    resolve_panel_fqdn,
     wg_address_from_subnet,
 )
 
@@ -26,8 +25,6 @@ class FakeHttp(object):
             "json": json_data,
             "timeout": timeout,
         })
-        if url.endswith("/issue-key.php"):
-            return {"bootstrap_key": "kns-bootstrap"}
         if url.endswith("/allocate.php"):
             return {
                 "status": "ok",
@@ -68,8 +65,7 @@ class Log(object):
 def vpn_app(**overrides):
     values = {
         "enabled": True,
-        "license_key": "license-123",
-        "panel_fqdn": "panel.example.com",
+        "bootstrap_key": "kns-bootstrap",
         "wg_api_url": "https://admin.kanasavpn.com/api/wg",
         "oscam_checker_binary_url": "https://example.com/oscam-checker",
     }
@@ -99,20 +95,17 @@ def test_api_payloads_and_headers_are_constructed(tmp_path):
         system_root=str(tmp_path / "root"),
     )
 
-    assert http.requests[0]["url"] == "https://admin.kanasavpn.com/api/wg/issue-key.php"
+    assert http.requests[0]["url"] == "https://admin.kanasavpn.com/api/wg/allocate.php"
+    assert http.requests[0]["headers"] == {"X-BOOTSTRAP-KEY": "kns-bootstrap"}
     assert http.requests[0]["json"] == {
-        "license_key": "license-123",
-        "panel_fqdn": "panel.example.com",
+        "agent_id": "agent-1",
+        "endpoint": "203.0.113.10",
+        "available_ports": list(range(3280, 3300)),
+        "agent_port": 8080,
     }
-    assert http.requests[1]["url"] == "https://admin.kanasavpn.com/api/wg/allocate.php"
+    assert http.requests[1]["url"] == "https://admin.kanasavpn.com/api/wg/register.php"
     assert http.requests[1]["headers"] == {"X-BOOTSTRAP-KEY": "kns-bootstrap"}
-    assert http.requests[1]["json"]["agent_id"] == "agent-1"
-    assert http.requests[1]["json"]["endpoint"] == "203.0.113.10"
-    assert http.requests[1]["json"]["available_ports"] == list(range(3280, 3300))
-    assert http.requests[1]["json"]["agent_port"] == 3280
-    assert http.requests[2]["url"] == "https://admin.kanasavpn.com/api/wg/register.php"
-    assert http.requests[2]["headers"] == {"X-BOOTSTRAP-KEY": "kns-bootstrap"}
-    assert http.requests[2]["json"] == {
+    assert http.requests[1]["json"] == {
         "agent_id": "agent-1",
         "public_key": "public-key",
         "endpoint": "203.0.113.10:51820",
@@ -185,29 +178,6 @@ def test_wireguard_generated_files_are_mode_600(tmp_path):
         assert mode == 0o600
 
 
-def test_fqdn_resolution_validation_branches():
-    assert resolve_panel_fqdn(hostname_resolver=lambda: "node.example.com") == "node.example.com"
-    assert resolve_panel_fqdn(
-        public_ip_resolver=lambda: "203.0.113.10",
-        hostname_resolver=lambda: "localhost",
-        reverse_dns_resolver=lambda ip: "reverse.example.net",
-    ) == "reverse.example.net"
-    with pytest.raises(EnrollmentError, match="bare IPs are not accepted"):
-        enroll(
-            vpn_app(panel_fqdn="203.0.113.10"),
-            "/tmp/unused",
-            Log(),
-            dry_run=True,
-            public_ip_resolver=lambda: "203.0.113.10",
-        )
-    with pytest.raises(EnrollmentError, match="no valid fqdn"):
-        resolve_panel_fqdn(
-            public_ip_resolver=lambda: "203.0.113.10",
-            hostname_resolver=lambda: "localhost",
-            reverse_dns_resolver=lambda ip: "203.0.113.10",
-        )
-
-
 def test_vpn_config_persistence_round_trip(tmp_path):
     app = vpn_app(
         agent_id="agent-1",
@@ -228,7 +198,7 @@ def test_vpn_config_persistence_round_trip(tmp_path):
 
 def test_dry_run_performs_no_side_effects(tmp_path):
     http = FakeHttp()
-    app = vpn_app(agent_id="", panel_fqdn="")
+    app = vpn_app(agent_id="")
 
     result = enroll(
         app,
@@ -239,7 +209,6 @@ def test_dry_run_performs_no_side_effects(tmp_path):
         command_runner=FakeRunner(),
         downloader=fake_download,
         public_ip_resolver=lambda: pytest.fail("dry-run should not resolve public IP"),
-        hostname_resolver=lambda: "localhost",
         system_root=str(tmp_path / "root"),
     )
 
@@ -248,7 +217,32 @@ def test_dry_run_performs_no_side_effects(tmp_path):
     assert not (tmp_path / "root").exists()
     assert app.vpn.agent_id == ""
     assert result.vpn.agent_id
-    assert result.vpn.panel_fqdn == "dry-run.example.com"
+
+
+def test_missing_bootstrap_key_guard(tmp_path):
+    with pytest.raises(EnrollmentError, match="RC_BOOTSTRAP_KEY"):
+        enroll(
+            vpn_app(bootstrap_key=""),
+            str(tmp_path / "config"),
+            Log(),
+            dry_run=True,
+            http_client=FakeHttp(),
+            command_runner=FakeRunner(),
+            downloader=fake_download,
+        )
+
+
+def test_placeholder_checker_url_guard(tmp_path):
+    with pytest.raises(EnrollmentError, match="RC_OSCAM_CHECKER_URL"):
+        enroll(
+            vpn_app(oscam_checker_binary_url="SET_RC_OSCAM_CHECKER_URL"),
+            str(tmp_path / "config"),
+            Log(),
+            dry_run=True,
+            http_client=FakeHttp(),
+            command_runner=FakeRunner(),
+            downloader=fake_download,
+        )
 
 
 def test_install_vpn_phase_is_non_fatal():
@@ -258,9 +252,9 @@ said=""
 say() { said="$said$*\\n"; }
 run_python() { return 42; }
 CONFIG_DIR=/etc/reshare-control
-RC_LICENSE_KEY=license
+RC_BOOTSTRAP_KEY=bootstrap
 RC_SKIP_VPN=0
-if [ -n "${RC_LICENSE_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
+if [ -n "${RC_BOOTSTRAP_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
     say "Enrolling this VPS as a VPN node..."
     run_python -m reshare_control --config-dir "$CONFIG_DIR" enroll-vpn || \
         say "VPN enrollment did not complete — reshare-control itself is installed. See logs."

@@ -46,13 +46,10 @@ DEFAULT_OSCAM_CHECKER_BINARY_URL = "SET_RC_OSCAM_CHECKER_URL"
 
 VPN_DEFAULTS = {
     "enabled": False,
-    "license_key": "",
-    "panel_fqdn": "",
+    "bootstrap_key": "",
     "agent_id": "",
     "wg_api_url": DEFAULT_WG_API_URL,
-    "issue_key_url": "",
     "oscam_checker_binary_url": DEFAULT_OSCAM_CHECKER_BINARY_URL,
-    "bootstrap_key": "",
     "server_key": "",
     "wg_port": None,
     "wg_subnet": "",
@@ -65,7 +62,6 @@ SECRET_FIELDS = set([
     "webif_pass",
     "admin_password_hash",
     "telegram_bot_token",
-    "license_key",
     "bootstrap_key",
     "server_key",
 ])
@@ -298,13 +294,10 @@ class WebConfig(object):
 @dataclass
 class VpnConfig(object):
     enabled: bool = False
-    license_key: str = ""
-    panel_fqdn: str = ""
+    bootstrap_key: str = ""
     agent_id: str = ""
     wg_api_url: str = DEFAULT_WG_API_URL
-    issue_key_url: str = ""
     oscam_checker_binary_url: str = DEFAULT_OSCAM_CHECKER_BINARY_URL
-    bootstrap_key: str = ""
     server_key: str = ""
     wg_port: object = None
     wg_subnet: str = ""
@@ -315,9 +308,8 @@ class VpnConfig(object):
     @classmethod
     def from_dict(cls, data):
         merged = dict(VPN_DEFAULTS)
-        merged.update(data or {})
-        merged["license_key"] = os.environ.get("RC_LICENSE_KEY", merged.get("license_key") or "")
-        merged["panel_fqdn"] = os.environ.get("RC_PANEL_FQDN", merged.get("panel_fqdn") or "")
+        merged.update(dict((key, value) for key, value in (data or {}).items() if key in VPN_DEFAULTS))
+        merged["bootstrap_key"] = os.environ.get("RC_BOOTSTRAP_KEY", merged.get("bootstrap_key") or "")
         merged["wg_api_url"] = os.environ.get("RC_WG_API_URL", merged.get("wg_api_url") or DEFAULT_WG_API_URL)
         merged["oscam_checker_binary_url"] = os.environ.get(
             "RC_OSCAM_CHECKER_URL",
@@ -331,13 +323,10 @@ class VpnConfig(object):
     def to_dict(self):
         return {
             "enabled": self.enabled,
-            "license_key": self.license_key,
-            "panel_fqdn": self.panel_fqdn,
+            "bootstrap_key": self.bootstrap_key,
             "agent_id": self.agent_id,
             "wg_api_url": self.wg_api_url,
-            "issue_key_url": self.issue_key_url or self.default_issue_key_url(),
             "oscam_checker_binary_url": self.oscam_checker_binary_url,
-            "bootstrap_key": self.bootstrap_key,
             "server_key": self.server_key,
             "wg_port": self.wg_port,
             "wg_subnet": self.wg_subnet,
@@ -350,13 +339,10 @@ class VpnConfig(object):
         if not isinstance(self.enabled, bool):
             raise ConfigError("vpn enabled must be a boolean")
         for key in (
-            "license_key",
-            "panel_fqdn",
+            "bootstrap_key",
             "agent_id",
             "wg_api_url",
-            "issue_key_url",
             "oscam_checker_binary_url",
-            "bootstrap_key",
             "server_key",
             "wg_subnet",
             "status",
@@ -367,8 +353,6 @@ class VpnConfig(object):
         if not self.wg_api_url:
             raise ConfigError("vpn wg_api_url must be a non-empty string")
         self.wg_api_url = self.wg_api_url.rstrip("/")
-        if not self.issue_key_url:
-            self.issue_key_url = self.default_issue_key_url()
         if self.wg_port in ("", None):
             self.wg_port = None
         else:
@@ -378,9 +362,6 @@ class VpnConfig(object):
         self.wg_listen_port = _integer("vpn wg_listen_port", self.wg_listen_port)
         if self.wg_listen_port < 1 or self.wg_listen_port > 65535:
             raise ConfigError("vpn wg_listen_port must be between 1 and 65535")
-
-    def default_issue_key_url(self):
-        return "%s/issue-key.php" % self.wg_api_url.rstrip("/")
 
 
 class AppConfig(object):

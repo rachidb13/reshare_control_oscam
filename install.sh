@@ -275,7 +275,7 @@ else
     say "  $web_runner_cmd"
 fi
 
-if [ -n "${RC_LICENSE_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
+if [ -n "${RC_BOOTSTRAP_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
     say "Enrolling this VPS as a VPN node..."
     run_python -m reshare_control --config-dir "$CONFIG_DIR" enroll-vpn || \
         say "VPN enrollment did not complete — reshare-control itself is installed. See logs."

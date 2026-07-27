@@ -6,7 +6,6 @@ import datetime
 import ipaddress
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -22,9 +21,9 @@ from .config import (
 )
 
 
-FQDN_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
 PUBLIC_IP_URL = "https://api.ipify.org"
 ALLOCATE_PORTS = list(range(3280, 3300))
+AGENT_PORT = 8080
 
 
 class EnrollmentError(RuntimeError):
@@ -59,8 +58,7 @@ class UrlLibHttpClient(object):
 
 def enroll(config, config_dir, logger, dry_run=False, http_client=None,
            command_runner=None, downloader=None, public_ip_resolver=None,
-           hostname_resolver=None, reverse_dns_resolver=None, port_probe=None,
-           system_root="/"):
+           port_probe=None, system_root="/"):
     if not isinstance(config, AppConfig):
         config = AppConfig.from_dict(config)
     working = AppConfig.from_dict(config.to_dict()) if dry_run else config
@@ -72,39 +70,17 @@ def enroll(config, config_dir, logger, dry_run=False, http_client=None,
 
     logger.info("starting VPN enrollment")
     vpn.enabled = True
-    _resolve_identity(
-        vpn,
-        public_ip_resolver=public_ip_resolver,
-        hostname_resolver=hostname_resolver,
-        reverse_dns_resolver=reverse_dns_resolver,
-        dry_run=dry_run,
-    )
-    _persist(working, config_dir, dry_run)
-
-    if not vpn.license_key:
-        raise EnrollmentError("license invalid: RC_LICENSE_KEY is required for VPN enrollment")
-    if not _valid_fqdn(vpn.panel_fqdn):
-        raise EnrollmentError(
-            "no valid fqdn: set RC_PANEL_FQDN to a DNS name like panel.example.com; bare IPs are not accepted"
-        )
+    vpn.bootstrap_key = vpn.bootstrap_key.strip()
+    if not vpn.bootstrap_key:
+        raise EnrollmentError("bootstrap key missing: set RC_BOOTSTRAP_KEY for VPN enrollment")
     if not vpn.oscam_checker_binary_url or vpn.oscam_checker_binary_url == DEFAULT_OSCAM_CHECKER_BINARY_URL:
         raise EnrollmentError("oscam-checker download URL missing: set RC_OSCAM_CHECKER_URL")
+    if not vpn.agent_id:
+        vpn.agent_id = str(uuid.uuid4())
+    _persist(working, config_dir, dry_run)
     if dry_run:
-        logger.info("dry run: VPN enrollment would issue key, allocate, configure WireGuard, install checker, and register")
+        logger.info("dry run: VPN enrollment would allocate, configure WireGuard, install checker, and register")
         return working
-
-    if not vpn.bootstrap_key:
-        logger.info("issuing kanasavpn bootstrap key")
-        data = _api_post(
-            http,
-            "issue-key",
-            vpn.issue_key_url,
-            {"license_key": vpn.license_key, "panel_fqdn": vpn.panel_fqdn},
-        )
-        vpn.bootstrap_key = _require_field(data, "bootstrap_key", "issue-key")
-        _persist(working, config_dir, dry_run)
-    else:
-        logger.info("reusing stored kanasavpn bootstrap key")
 
     public_ip = _resolve_public_ip(public_ip_resolver)
     if not (vpn.server_key and vpn.wg_port and vpn.wg_subnet):
@@ -120,7 +96,7 @@ def enroll(config, config_dir, logger, dry_run=False, http_client=None,
                 "agent_id": vpn.agent_id,
                 "endpoint": public_ip,
                 "available_ports": ports,
-                "agent_port": ports[0],
+                "agent_port": AGENT_PORT,
             },
             headers={"X-BOOTSTRAP-KEY": vpn.bootstrap_key},
         )
@@ -197,42 +173,6 @@ def wg_address_from_subnet(subnet):
     return "%s/%s" % (network.network_address + 1, network.prefixlen)
 
 
-def resolve_panel_fqdn(public_ip_resolver=None, hostname_resolver=None,
-                       reverse_dns_resolver=None):
-    hostname = _hostname_f(hostname_resolver)
-    if _valid_fqdn(hostname):
-        return hostname.lower()
-    public_ip = _resolve_public_ip(public_ip_resolver)
-    reverse = _reverse_dns(public_ip, reverse_dns_resolver)
-    if _valid_fqdn(reverse):
-        return reverse.lower()
-    raise EnrollmentError(
-        "no valid fqdn: set RC_PANEL_FQDN to a DNS name like panel.example.com; bare IPs are not accepted"
-    )
-
-
-def _resolve_identity(vpn, public_ip_resolver=None, hostname_resolver=None,
-                      reverse_dns_resolver=None, dry_run=False):
-    if vpn.panel_fqdn:
-        vpn.panel_fqdn = vpn.panel_fqdn.strip().lower()
-        if not _valid_fqdn(vpn.panel_fqdn):
-            raise EnrollmentError(
-                "invalid fqdn: panel_fqdn must match /^[a-z0-9.-]+\\.[a-z]{2,}$/; bare IPs are not accepted"
-            )
-    else:
-        if dry_run:
-            hostname = _hostname_f(hostname_resolver)
-            vpn.panel_fqdn = hostname.lower() if _valid_fqdn(hostname) else "dry-run.example.com"
-        else:
-            vpn.panel_fqdn = resolve_panel_fqdn(
-                public_ip_resolver=public_ip_resolver,
-                hostname_resolver=hostname_resolver,
-                reverse_dns_resolver=reverse_dns_resolver,
-            )
-    if not vpn.agent_id:
-        vpn.agent_id = str(uuid.uuid4())
-
-
 def _api_post(http, step, url, payload, headers=None):
     response = http("POST", url, headers=headers or {}, json_data=payload, timeout=10)
     status = _response_status(response)
@@ -249,10 +189,6 @@ def _error_reason(step, status, data, body):
         message = data.get("error") or data.get("message") or ""
     if not message:
         message = body or "HTTP %s" % status
-    if step == "issue-key" and status == 401:
-        return "license invalid: %s" % message
-    if step == "issue-key" and status == 502:
-        return "license server unreachable: %s" % message
     if step in ("allocate", "register") and status == 401:
         return "bad bootstrap key: %s" % message
     return "%s failed: %s" % (step, message)
@@ -432,39 +368,6 @@ def _resolve_public_ip(public_ip_resolver=None):
     except ValueError:
         raise EnrollmentError("public IP lookup failed: invalid IP returned")
     return value
-
-
-def _hostname_f(hostname_resolver=None):
-    if hostname_resolver:
-        return str(hostname_resolver()).strip()
-    try:
-        return subprocess.check_output(["hostname", "-f"], text=True).strip()
-    except Exception:
-        return ""
-
-
-def _reverse_dns(public_ip, reverse_dns_resolver=None):
-    if reverse_dns_resolver:
-        return str(reverse_dns_resolver(public_ip)).strip()
-    try:
-        return socket.gethostbyaddr(public_ip)[0].strip()
-    except Exception:
-        return ""
-
-
-def _valid_fqdn(value):
-    text = str(value or "").strip().lower()
-    if not FQDN_RE.match(text):
-        return False
-    return not _is_ip(text)
-
-
-def _is_ip(value):
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
 
 
 def _write_file(path, content, mode, dry_run=False):
