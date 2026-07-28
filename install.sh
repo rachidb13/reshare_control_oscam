@@ -157,12 +157,12 @@ PY
     chmod 600 "$target_dir/config.json"
 }
 
-# Decide before touching disk whether this box can also run the VPN node.
-# WireGuard ships in-repo from Ubuntu 20.04 and Debian 11; older releases need a
-# PPA or dkms build, so there the core app installs alone and enrollment is
-# skipped. Non Debian-family systems have no apt-get and are refused outright.
-MIN_WIREGUARD_UBUNTU=20.04
-MIN_WIREGUARD_DEBIAN=11
+# Refuse unsupported systems before touching disk. Two independent constraints
+# land on the same releases: the app needs Python 3.8 (Ubuntu 18.04 ships 3.6,
+# which cannot import dataclasses), and enrollment needs WireGuard from the
+# standard repos. Both are satisfied from Ubuntu 20.04 and Debian 11 onward.
+MIN_UBUNTU=20.04
+MIN_DEBIAN=11
 
 # Numeric rank for "MAJOR" or "MAJOR.MINOR", leading zeros stripped so "04" is
 # not read as octal in shell arithmetic.
@@ -192,20 +192,23 @@ check_supported_os() {
         os_name=$(. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-unknown}")
     fi
     case $os_id in
-        ubuntu) min_version=$MIN_WIREGUARD_UBUNTU ;;
-        debian) min_version=$MIN_WIREGUARD_DEBIAN ;;
+        ubuntu) min_version=$MIN_UBUNTU ;;
+        debian) min_version=$MIN_DEBIAN ;;
         *)
             say "Unsupported system: $os_name"
-            say "This installer supports Ubuntu and Debian."
+            say "This app needs Ubuntu $MIN_UBUNTU or newer, or Debian $MIN_DEBIAN or newer."
             say "It installs WireGuard with apt-get, so other distributions will not work."
             exit 1
             ;;
     esac
-    # Too old for stock WireGuard, or an unnumbered rolling release: install the
-    # core app only and leave VPN enrollment off. Kept silent by design.
+    # An unnumbered rolling release ranks 0 and is refused with the same message.
     if [ "$(version_rank "$os_version")" -lt "$(version_rank "$min_version")" ]; then
-        RC_SKIP_VPN=1
-        export RC_SKIP_VPN
+        say "Unsupported version: $os_name"
+        say "This app needs Ubuntu $MIN_UBUNTU or newer, or Debian $MIN_DEBIAN or newer."
+        say "Older releases ship Python 3.6, which cannot run the panel, and have no"
+        say "WireGuard package for the VPN node."
+        say "Upgrade the VPS, then run the installer again."
+        exit 1
     fi
 }
 

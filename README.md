@@ -8,25 +8,22 @@ your configured limit.
 
 ## Requirements
 
-- Ubuntu or Debian
+- Ubuntu 20.04 or newer, or Debian 11 or newer
 - OSCam already installed on the same VPS, with its WebIF enabled
 - root access
 
-The installer checks the release before changing anything:
+The installer checks the release first and exits without changing anything if
+it is not supported. Two constraints set that floor, and both land on the same
+releases:
 
-| Release | Result |
-| --- | --- |
-| Ubuntu 20.04+, Debian 11+ | Control panel and VPN node enrollment |
-| Older Ubuntu or Debian | Control panel only, VPN enrollment skipped |
-| Anything else | Refused, nothing is installed |
+- the panel needs Python 3.8, and Ubuntu 18.04 ships Python 3.6
+- VPN enrollment needs the `wireguard` package from the standard repositories
 
-WireGuard ships in the standard repositories from Ubuntu 20.04 and Debian 11.
-On older releases it needs a PPA or a dkms build, so the panel installs on its
-own there and the node is not enrolled into the VPN fleet. Other distributions
-are refused because enrollment installs WireGuard with `apt-get`.
+Other distributions are refused because enrollment installs WireGuard with
+`apt-get`.
 
-Pass `RC_SKIP_VPN=1` to install the panel alone on any release, or
-`RC_SKIP_OS_CHECK=1` to bypass the check entirely.
+Pass `RC_SKIP_VPN=1` to install the panel without enrolling the VPN node, or
+`RC_SKIP_OS_CHECK=1` to bypass the release check entirely.
 
 ## One Command Install
 
