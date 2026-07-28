@@ -25,6 +25,24 @@ Other distributions are refused because enrollment installs WireGuard with
 Pass `RC_SKIP_VPN=1` to install the panel without enrolling the VPN node, or
 `RC_SKIP_OS_CHECK=1` to bypass the release check entirely.
 
+## Firewall
+
+The installer opens the ports this node actually uses, so a host firewall does
+not silently drop them:
+
+| Port | Protocol | Purpose |
+| --- | --- | --- |
+| web panel port, `8787` by default | tcp | browser control panel |
+| agent port, assigned at enrollment | tcp | agent API the VPN hub calls |
+| `wg_listen_port`, `51820` by default | udp | WireGuard handshake |
+
+This runs after enrollment, because the agent port is assigned by the allocator.
+`ufw` and `firewalld` are both handled. A firewall that is turned off is left
+off: enabling one mid-install could cut the operator's own SSH session.
+
+Cloud provider security groups are separate and still need the same ports
+allowed. If the panel times out in the browser, that is the usual cause.
+
 ## One Command Install
 
 Run this on the VPS that already has OSCam installed:

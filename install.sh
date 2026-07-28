@@ -338,6 +338,56 @@ if [ -n "${RC_BOOTSTRAP_KEY:-}" ] && [ "${RC_SKIP_VPN:-0}" != "1" ]; then
         say "  a setup step did not complete — reshare-control core is installed. See logs."
 fi
 
+# The panel, the agent API, and the WireGuard handshake all need inbound ports.
+# An already-active host firewall drops them silently, which looks like a broken
+# install, so open exactly the ports this node ended up using. Runs after
+# enrollment because the agent port is assigned by the allocator. Never turns a
+# firewall on: enabling one mid-install could cut the operator's own SSH session.
+open_firewall_ports() {
+    ports=$(run_python - "$CONFIG_DIR" <<'PY'
+import json
+import os
+import sys
+
+try:
+    with open(os.path.join(sys.argv[1], "config.json")) as fh:
+        cfg = json.load(fh)
+except (IOError, OSError, ValueError):
+    raise SystemExit(0)
+
+web = cfg.get("web") or {}
+vpn = cfg.get("vpn") or {}
+wanted = [(web.get("port"), "tcp")]
+if vpn.get("enabled"):
+    wanted.append((vpn.get("wg_port"), "tcp"))
+    wanted.append((vpn.get("wg_listen_port"), "udp"))
+
+for port, proto in wanted:
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        continue
+    if 0 < port < 65536:
+        print("%d/%s" % (port, proto))
+PY
+    ) || return 0
+    [ -n "$ports" ] || return 0
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -1 | grep -qi 'status: active'; then
+        for spec in $ports; do
+            ufw allow "$spec" >/dev/null 2>&1 || true
+        done
+        return 0
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        for spec in $ports; do
+            firewall-cmd --permanent --add-port="$spec" >/dev/null 2>&1 || true
+        done
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+}
+
+open_firewall_ports
+
 say "installing timer . . . ."
 if command -v systemctl >/dev/null 2>&1 && systemctl >/dev/null 2>&1; then
     install_systemd
