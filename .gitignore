@@ -12,3 +12,7 @@ dist/
 config.json
 state.json
 *.local
+
+# Local agent tooling - not part of the product
+.claude/
+.specify/
