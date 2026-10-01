@@ -8,7 +8,8 @@ your configured limit.
 
 ## Requirements
 
-- Ubuntu 20.04 or newer, or Debian 11 or newer
+- Ubuntu 20.04 or newer, or Debian 11 or newer (Ubuntu 18.04: see
+  [Ubuntu 18.04 Install](#ubuntu-1804-install))
 - OSCam already installed on the same VPS, with its WebIF enabled
 - root access
 
@@ -59,6 +60,27 @@ The installer starts the web panel and prints:
 
 If the browser cannot connect, allow TCP port `8787` in your VPS firewall or
 provider security group.
+
+## Ubuntu 18.04 Install
+
+Ubuntu 18.04 has its own installer. It gives you the same web panel and poller,
+without the VPN node:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rachidb13/reshare_control_oscam/master/install-ubuntu18.sh | sudo sh
+```
+
+How it differs from `install.sh`:
+
+- it runs on Ubuntu 18.04 only, and refuses every other system before changing
+  anything (newer Ubuntu releases are pointed at `install.sh`)
+- it installs `python3.8` from the Ubuntu archive and runs the panel and poller
+  with it; the system `python3` (3.6) is left alone
+- it never installs WireGuard or enrolls the VPN node, so the firewall step opens
+  only the web panel port
+
+`python3.8` comes from the `universe` component. If that is disabled, the
+installer stops and tells you to run `add-apt-repository universe`.
 
 ## What It Does
 
