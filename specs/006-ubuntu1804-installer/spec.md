@@ -30,9 +30,13 @@ runs on schedule.
    operator runs the 18.04 installer, **Then** it installs the runtime the panel needs,
    installs the panel and poller, starts them, and prints the panel URL, the user
    `admin`, and a password.
-2. **Given** the install finished, **When** the box reboots, **Then** the panel and the
+2. **Given** the install finished, **When** the operator opens the printed URL in a
+   browser, **Then** they see the same web interface as on a box installed with the
+   standard installer, log in as `admin`, and can add an OSCam instance and view its
+   users.
+3. **Given** the install finished, **When** the box reboots, **Then** the panel and the
    poller schedule come back on their own.
-3. **Given** the install finished, **When** the operator inspects the system, **Then**
+4. **Given** the install finished, **When** the operator inspects the system, **Then**
    no VPN/WireGuard software was installed, no VPN interface or key exists, and no
    enrollment request was made to the fleet.
 
@@ -124,6 +128,10 @@ the installer, confirm the settings and password are unchanged and services rest
 - **FR-008**: The installer MUST install and start the same panel and poller as the
   standard installer (same configuration location, same service names, same schedule
   rules, same admin credential handling).
+- **FR-008a**: The web interface on an 18.04 box MUST be the same web interface the
+  standard installer provides: same pages, same login, same instance/user management,
+  same default port, started at boot and restarted if it crashes. Only VPN-link
+  features are absent, because the link is never set up.
 - **FR-009**: The installer MUST preserve an existing configuration and admin password
   on re-run.
 - **FR-010**: If a host firewall is already active, the installer MUST open only the
