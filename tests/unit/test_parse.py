@@ -2,7 +2,7 @@ import os
 import hashlib
 import json
 
-from reshare_control.parse import NO_READING, normalize_userstats_body
+from reshare_control.parse import NO_READING, normalize_userstats_body, validate_userstats_body
 
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fixtures")
@@ -93,3 +93,32 @@ def test_oscam_users_shape_resolves_id_prefixed_md5_and_nested_ecm_rate():
     assert users[0].name == username
     assert users[0].ecm_per_min == 347
     assert users[0].connected is True
+
+
+def _ncam_body(entries):
+    # NCam serves the same document as OSCam, rooted at "ncam" instead of "oscam".
+    return json.dumps({"ncam": {"version": "15.6", "users": entries}})
+
+
+def test_ncam_root_with_userbit_shape_resolves_md5_and_n_requ_m():
+    username = "alpha"
+    digest = hashlib.md5(username.encode()).hexdigest()
+    body = _ncam_body([{"user": {
+        "usermd5": digest,
+        "status": "online",
+        "port": "40000",
+        "stats": {"n_requ_m": "31", "cwok": "120"},
+    }}])
+
+    users = normalize_userstats_body(body, userconfig_html=_fixture("userconfig.html"))
+
+    assert [(u.name, u.ecm_per_min) for u in users] == [("alpha", 31)]
+
+
+def test_ncam_root_validates_like_oscam():
+    body = _ncam_body([{"user": {"name": "bravo", "disabled": "0", "total_ecm_min": "4"}}])
+
+    result = validate_userstats_body(body)
+
+    assert result.user_count == 1
+    assert result.usable_ecm_count == 1

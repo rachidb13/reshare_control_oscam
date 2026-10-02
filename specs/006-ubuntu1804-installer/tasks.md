@@ -80,11 +80,34 @@ config.json created (600), three units written with python3.8 in `ExecStart`,
   `sh -n install-ubuntu18.sh`, and confirm `git diff --exit-code master -- install.sh`
 - [ ] T016 Manual check on the 18.04 VPS per `quickstart.md` (needs SSH access restored)
 
+## Phase 7: User Story 4 - NCam support (P1)
+
+**Independent Test**: unit + integration tests below with an `ncam.user` folder and an
+NCam-shaped stats body served only at `/ncamapi.json`.
+
+- [X] T017 [US4] Tests: `list_account_users`/`set_account_disabled`/`stop_account` work on
+  a folder with only `ncam.user`; `oscam.user` wins when both exist; the error names both
+  files when neither exists; in `tests/unit/test_enforce.py`
+- [X] T018 [US4] Tests: `normalize_userstats_body`/`validate_userstats_body` read a body
+  rooted at `"ncam"` (NCam `n_requ_m` stats shape), in `tests/unit/test_parse.py`
+- [X] T019 [US4] Tests: `run_cycle` on an NCam folder requests `/ncamapi.json` first; on an
+  OSCam folder a 404 from `/oscamapi.json` falls back to `/ncamapi.json`; in
+  `tests/integration/test_poller.py`
+- [X] T020 [US4] Implement `user_file_path`/`is_ncam` in `src/reshare_control/enforce.py`
+  and use them for read, write and temp-file naming
+- [X] T021 [US4] Implement `api_root` in `src/reshare_control/parse.py` and use it in
+  `parse.py` and `poller.py`
+- [X] T022 [US4] Implement `fetch_userstats(fetcher, prefer_ncam)` with 404 fallback in
+  `src/reshare_control/webif.py`; use it in `poller.run_cycle` and `cli.command_test`
+- [X] T023 [US4] Update the instance form hint/label in `src/reshare_control/webapp.py`
+- [X] T024 [US4] README: NCam support, and "re-run the same command to update"
+
 ## Dependencies
 
 - T001 → T003–T013. T002 → T005, T010, T011.
 - US2 (T003–T005) runs before US1 because the gate is the first thing the script does.
 - US3 depends on US1.
+- US4 (T017–T024) only touches app code and is independent of the installer tasks.
 - T014 is independent. T015 runs after everything. T016 needs the user.
 
 ## Parallel Opportunities

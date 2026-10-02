@@ -77,6 +77,22 @@ class CurlFetcher(Fetcher):
         return FetchResult(OTHER_HTTP, body=body, http_status=http_status, error=stderr.strip())
 
 
+OSCAM_USERSTATS_PATH = "/oscamapi.json?part=userstats"
+# NCam renamed the API; userconfig.html and reinit kept their OSCam names.
+NCAM_USERSTATS_PATH = "/ncamapi.json?part=userstats"
+
+
+def fetch_userstats(fetcher, prefer_ncam=False):
+    """Fetch userstats from the OSCam or NCam API, trying the other on a 404."""
+    paths = [OSCAM_USERSTATS_PATH, NCAM_USERSTATS_PATH]
+    if prefer_ncam:
+        paths.reverse()
+    result = fetcher.get(paths[0])
+    if result.status == OTHER_HTTP and result.http_status == 404:
+        return fetcher.get(paths[1])
+    return result
+
+
 def reinit(fetcher_or_base_url, auth=None, timeout_s=5):
     if hasattr(fetcher_or_base_url, "get"):
         fetcher = fetcher_or_base_url

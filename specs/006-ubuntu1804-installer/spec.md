@@ -91,6 +91,38 @@ the installer, confirm the settings and password are unchanged and services rest
 
 ---
 
+### User Story 4 - Control NCam as well as OSCam (Priority: P1)
+
+Some operators run NCam (an OSCam fork) instead of OSCam. NCam keeps its accounts in
+`ncam.user` and serves its stats at a renamed API address, so the panel today shows no
+users and cannot stop anyone on those boxes. The operator points an instance at the
+NCam config folder and it works exactly like an OSCam instance, with nothing extra to
+choose.
+
+**Why this priority**: The first 18.04 operator runs NCam; without this the panel is
+installed but useless for them.
+
+**Independent Test**: Point an instance at a folder containing only `ncam.user`, with
+a WebIF that answers on NCam's API address. Users are listed, ECM/min is read, and a
+stop sets `disabled = 1` in `ncam.user` and reloads.
+
+**Acceptance Scenarios**:
+
+1. **Given** a config folder with `ncam.user` and no `oscam.user`, **When** the panel
+   lists the instance's users, **Then** it shows the accounts from `ncam.user`.
+2. **Given** an NCam WebIF, **When** the poller runs, **Then** it reads each user's
+   ECM/min from NCam's stats, the same way as for OSCam.
+3. **Given** an NCam user over the limit with auto-stop on, **When** the strike count is
+   reached, **Then** only that account's block in `ncam.user` is set to disabled, and
+   NCam is reloaded the same way OSCam is.
+4. **Given** an existing OSCam instance, **When** this change is installed, **Then**
+   its behaviour is unchanged.
+5. **Given** an operator already installed with the 18.04 installer, **When** they
+   re-run the same install command, **Then** they get NCam support and keep their
+   settings.
+
+---
+
 ### Edge Cases
 
 - The extra runtime package cannot be installed (no internet, broken package sources,
@@ -103,6 +135,9 @@ the installer, confirm the settings and password are unchanged and services rest
 - No systemd (container): the poller falls back to a cron schedule, as in the standard
   installer.
 - Run without root: the installer stops with a clear message before changing anything.
+- A config folder holds both `oscam.user` and `ncam.user`: `oscam.user` is used, as
+  before, so existing installs never change behaviour.
+- A config folder holds neither file: the error names both file names.
 - Operator overrides the source location or config directory through the same
   environment variables the standard installer accepts.
 
@@ -142,6 +177,17 @@ the installer, confirm the settings and password are unchanged and services rest
   available.
 - **FR-013**: If installing the runtime fails, the installer MUST stop with a message
   naming the failure and MUST NOT install services.
+- **FR-014**: The app MUST use `ncam.user` as the account file when the config folder
+  has `ncam.user` and no `oscam.user`; otherwise it uses `oscam.user`, as today.
+- **FR-015**: The app MUST read user stats from NCam's API address as well as OSCam's.
+  It tries the one that matches the account file first and falls back to the other when
+  the first answers "not found".
+- **FR-016**: The app MUST accept NCam's stats document, whose top-level key is `ncam`
+  instead of `oscam`.
+- **FR-017**: Stopping/re-enabling an NCam user MUST follow Principle V exactly as for
+  OSCam: only that account block changes, and it is applied via the WebIF reload.
+- **FR-018**: The panel's instance form MUST say the config path may contain
+  `oscam.user` or `ncam.user`.
 
 ### Key Entities
 

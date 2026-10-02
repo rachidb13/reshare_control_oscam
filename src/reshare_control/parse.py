@@ -149,10 +149,18 @@ def normalize_userstats_body(body, userconfig_html=None):
     return users
 
 
+def api_root(data):
+    """The stats document's body: OSCam roots it at "oscam", NCam at "ncam"."""
+    for key in ("oscam", "ncam"):
+        if isinstance(data.get(key), dict):
+            return data[key]
+    return data
+
+
 def _minimal_userstats_entries(data):
     if not isinstance(data, dict):
         return []
-    oscam = data.get("oscam", data)
+    oscam = api_root(data)
     if not isinstance(oscam, dict):
         return []
     candidates = []
@@ -172,7 +180,7 @@ def _minimal_userstats_entries(data):
 def _all_userstats_entries(data):
     if not isinstance(data, dict):
         return []
-    oscam = data.get("oscam", data)
+    oscam = api_root(data)
     if not isinstance(oscam, dict):
         return []
     candidates = []

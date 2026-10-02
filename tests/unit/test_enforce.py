@@ -2,9 +2,12 @@ import json
 import os
 import stat
 
+import pytest
+
 from reshare_control.config import InstanceConfig
 from reshare_control.enforce import (
     AUDIT_FILENAME,
+    EnforcementError,
     enable_account,
     list_account_users,
     set_account_disabled,
@@ -167,3 +170,62 @@ disabled = 1
     records = [json.loads(line) for line in (tmp_path / AUDIT_FILENAME).read_text().splitlines()]
     assert records[-1]["action"] == "reinstate"
     assert records[-1]["strike_count"] == 4
+
+
+def _write_named_user_file(tmp_path, name, body):
+    path = tmp_path / name
+    path.write_text(body)
+    os.chmod(str(path), 0o640)
+    return path
+
+
+def test_ncam_user_file_is_used_when_there_is_no_oscam_user(tmp_path):
+    path = _write_named_user_file(tmp_path, "ncam.user", """[account]
+user = alpha
+pwd = one
+
+[account]
+user = bravo
+pwd = two
+""")
+
+    assert list_account_users(str(tmp_path)) == ["alpha", "bravo"]
+    assert set_account_disabled(str(tmp_path), "bravo", True) is True
+    text = path.read_text()
+    assert text.count("disabled = 1") == 1
+    assert text.index("disabled = 1") > text.index("user = bravo")
+    assert stat.S_IMODE(os.stat(str(path)).st_mode) == 0o640
+    assert not (tmp_path / "oscam.user").exists()
+    assert [p.name for p in tmp_path.iterdir()] == ["ncam.user"]
+
+
+def test_oscam_user_wins_when_both_files_exist(tmp_path):
+    _write_named_user_file(tmp_path, "oscam.user", "[account]\nuser = from_oscam\n")
+    ncam = _write_named_user_file(tmp_path, "ncam.user", "[account]\nuser = from_ncam\n")
+
+    assert list_account_users(str(tmp_path)) == ["from_oscam"]
+    set_account_disabled(str(tmp_path), "from_oscam", True)
+    assert "disabled" not in ncam.read_text()
+
+
+def test_missing_user_file_error_names_both_files(tmp_path):
+    with pytest.raises(EnforcementError) as excinfo:
+        list_account_users(str(tmp_path))
+
+    message = str(excinfo.value)
+    assert "oscam.user" in message and "ncam.user" in message
+
+
+def test_stop_account_on_ncam_disables_block_and_reinits(tmp_path):
+    path = _write_named_user_file(tmp_path, "ncam.user", "[account]\nuser = alpha\npwd = one\n")
+    config = _config(tmp_path, auto_stop_enabled=True)
+    fetcher = FakeFetcher()
+    state = UserStrikeState(consecutive_strikes=3, last_observed_ecm_min=27,
+                            last_evaluated_at="2026-07-07T10:00:00Z", status="flagged")
+
+    stop_account(config, str(tmp_path), "alpha", state, observed_ecm_min=27,
+                 fetcher=fetcher, timestamp="2026-07-07T10:00:00Z")
+
+    assert "disabled = 1" in path.read_text()
+    assert fetcher.requests == ["/userconfig.html?action=reinit"]
+    assert state.status == "stopped"

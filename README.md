@@ -82,6 +82,16 @@ How it differs from `install.sh`:
 `python3.8` comes from the `universe` component. If that is disabled, the
 installer stops and tells you to run `add-apt-repository universe`.
 
+To update a box later, run the same command again. It downloads the current code,
+keeps your instances, settings and admin password, and restarts the panel.
+
+## NCam
+
+The panel controls NCam the same way as OSCam, with nothing to switch on. Point the
+instance's config path at the folder that holds `ncam.user`. When that folder has
+`ncam.user` and no `oscam.user`, the panel reads and edits `ncam.user` and polls NCam's
+`/ncamapi.json`. If a folder has both files, `oscam.user` is used, as before.
+
 ## What It Does
 
 - Add multiple OSCam WebIF instances from one panel

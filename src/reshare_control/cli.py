@@ -17,12 +17,12 @@ from .config import (
     mask_username,
     save_config,
 )
-from .enforce import EnforcementError, enable_account, stop_account
+from .enforce import EnforcementError, enable_account, is_ncam, stop_account
 from .parse import validate_userstats_body
 from .poller import run_cycle
 from .state import StateError, StateStore, UserStrikeState
 from .vpn_enroll import EnrollmentError
-from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher
+from .webif import AUTH_FAILED, OK, OTHER_HTTP, TRANSPORT_ERROR, CurlFetcher, fetch_userstats
 
 
 EXIT_SUCCESS = 0
@@ -156,7 +156,7 @@ def command_status(args, config):
 def command_test(args, config):
     fetcher = CurlFetcher(config.base_url(), auth=config.auth(),
                           timeout_s=config.request_timeout_s)
-    result = fetcher.get("/oscamapi.json?part=userstats")
+    result = fetch_userstats(fetcher, prefer_ncam=is_ncam(config.base_path))
     if result.status == AUTH_FAILED:
         _test_output(args, False, "authentication failed", EXIT_AUTH_FAILED,
                      config=config, fetch=result)

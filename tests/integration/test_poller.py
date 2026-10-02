@@ -5,7 +5,7 @@ from reshare_control.config import InstanceConfig, save_config
 from reshare_control.parse import NO_READING
 from reshare_control.poller import run_cycle
 from reshare_control.state import StateStore
-from reshare_control.webif import FetchResult, OK, TRANSPORT_ERROR
+from reshare_control.webif import FetchResult, OK, OTHER_HTTP, TRANSPORT_ERROR
 
 
 class FakeFetcher(object):
@@ -406,3 +406,45 @@ def test_ignore_user_policy_never_stops(tmp_path):
     assert state.status == "flagged"
     assert state.exempt is True
     assert result.stopped_users == []
+
+
+def _ncam_body(users):
+    return json.dumps({"ncam": {"users": [{"user": user} for user in users]}})
+
+
+def test_ncam_folder_polls_ncam_api_first(tmp_path):
+    (tmp_path / "ncam.user").write_text("[account]\nuser = alpha\n")
+    config = _config(base_path=str(tmp_path))
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([_ncam_body([_user("alpha", 25)])])
+
+    result = run_cycle(config, store, fetcher=fetcher, evaluated_at="2026-07-07T10:00:00Z")
+
+    assert fetcher.requests == ["/ncamapi.json?part=userstats"]
+    assert [(u.name, u.ecm_per_min) for u in result.users] == [("alpha", 25)]
+
+
+def test_oscam_api_404_falls_back_to_ncam_api(tmp_path):
+    (tmp_path / "oscam.user").write_text("[account]\nuser = alpha\n")
+    config = _config(base_path=str(tmp_path))
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([
+        FetchResult(OTHER_HTTP, body="not found", http_status=404),
+        _ncam_body([_user("alpha", 25)]),
+    ])
+
+    result = run_cycle(config, store, fetcher=fetcher, evaluated_at="2026-07-07T10:00:00Z")
+
+    assert fetcher.requests == ["/oscamapi.json?part=userstats", "/ncamapi.json?part=userstats"]
+    assert [(u.name, u.ecm_per_min) for u in result.users] == [("alpha", 25)]
+
+
+def test_oscam_folder_still_uses_oscam_api_only(tmp_path):
+    (tmp_path / "oscam.user").write_text("[account]\nuser = alpha\n")
+    config = _config(base_path=str(tmp_path))
+    store = _store(tmp_path, config)
+    fetcher = FakeFetcher([_body([_user("alpha", 5)])])
+
+    run_cycle(config, store, fetcher=fetcher, evaluated_at="2026-07-07T10:00:00Z")
+
+    assert fetcher.requests == ["/oscamapi.json?part=userstats"]

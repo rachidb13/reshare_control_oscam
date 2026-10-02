@@ -444,7 +444,7 @@ def _instance_form(instance=None):
     return """
     <section class="panel">
       <div class="section-head">
-        <div><h2>%s</h2><p>Use 127.0.0.1 for OSCam on this VPS. The config path must contain oscam.user.</p></div>
+        <div><h2>%s</h2><p>Use 127.0.0.1 for OSCam or NCam on this VPS. The config path must contain oscam.user or ncam.user.</p></div>
       </div>
       <form method="post" action="/instances/save" class="grid">
         <input type="hidden" name="id" value="%s">
@@ -454,7 +454,7 @@ def _instance_form(instance=None):
         <label>WebIF port<input name="port" type="number" min="1" max="65535" required value="%s" placeholder="8888"></label>
         <label>WebIF user<input name="webif_user" value="%s" placeholder="optional"></label>
         <label>WebIF password<input name="webif_pass" type="password" placeholder="%s" value=""></label>
-        <label class="span-2">OSCam config path<input name="base_path" required value="%s" placeholder="/usr/local/etc"></label>
+        <label class="span-2">OSCam/NCam config path<input name="base_path" required value="%s" placeholder="/usr/local/etc"></label>
         <div class="form-group"><h3>Global policy</h3></div>
         <label>Max ECM/min<input name="max_ecm_per_min" type="number" step="0.1" min="0.1" value="%s"></label>
         <label>Strike count<input name="strike_count" type="number" min="1" value="%s"></label>

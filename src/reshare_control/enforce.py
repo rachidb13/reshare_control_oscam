@@ -11,6 +11,8 @@ from .webif import OK, reinit
 
 
 OSCAM_USER_FILENAME = "oscam.user"
+# NCam is an OSCam fork with the same account format under its own file name.
+NCAM_USER_FILENAME = "ncam.user"
 AUDIT_FILENAME = "audit.log"
 
 
@@ -18,14 +20,33 @@ class EnforcementError(RuntimeError):
     """Raised when an OSCAM account cannot be safely edited or applied."""
 
 
-def list_account_users(base_path):
-    """Return usernames from local oscam.user [account] blocks."""
-    path = os.path.join(base_path, OSCAM_USER_FILENAME)
+def is_ncam(base_path):
+    """True when the config folder holds an NCam account file and no OSCam one."""
+    return (not os.path.exists(os.path.join(base_path, OSCAM_USER_FILENAME))
+            and os.path.exists(os.path.join(base_path, NCAM_USER_FILENAME)))
+
+
+def user_file_path(base_path):
+    """oscam.user, or ncam.user on an NCam box; oscam.user wins if both exist."""
+    name = NCAM_USER_FILENAME if is_ncam(base_path) else OSCAM_USER_FILENAME
+    return os.path.join(base_path, name)
+
+
+def _read_user_file(base_path):
+    path = user_file_path(base_path)
     try:
         with open(path, "r") as fh:
-            lines = fh.readlines()
+            return path, fh.readlines()
     except IOError as exc:
+        if not os.path.exists(path):
+            raise EnforcementError("cannot read %s or %s in %s: %s" % (
+                OSCAM_USER_FILENAME, NCAM_USER_FILENAME, base_path, exc))
         raise EnforcementError("cannot read %s: %s" % (path, exc))
+
+
+def list_account_users(base_path):
+    """Return usernames from the local account file's [account] blocks."""
+    _, lines = _read_user_file(base_path)
     users = []
     for start, end in _account_blocks(lines):
         username = _block_username(lines[start:end])
@@ -36,12 +57,7 @@ def list_account_users(base_path):
 
 def set_account_disabled(base_path, username, disabled):
     """Set disabled=1/0 for exactly one OSCAM [account] block."""
-    path = os.path.join(base_path, OSCAM_USER_FILENAME)
-    try:
-        with open(path, "r") as fh:
-            lines = fh.readlines()
-    except IOError as exc:
-        raise EnforcementError("cannot read %s: %s" % (path, exc))
+    path, lines = _read_user_file(base_path)
 
     blocks = _account_blocks(lines)
     target = None
@@ -246,7 +262,7 @@ def _atomic_write_preserving_metadata(path, lines):
     directory = os.path.dirname(path) or "."
     st = os.stat(path)
     mode = stat.S_IMODE(st.st_mode)
-    fd, tmp_path = tempfile.mkstemp(prefix=".oscam.user.", suffix=".tmp", dir=directory)
+    fd, tmp_path = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=directory)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, "w") as fh:

@@ -3,12 +3,12 @@
 from datetime import datetime, timedelta, timezone
 import json
 
-from .enforce import append_audit_record, reinstate_account, stop_account
+from .enforce import append_audit_record, is_ncam, reinstate_account, stop_account
 from .notify import TelegramNotifier, should_notify
-from .parse import NO_READING, normalize_userstats_body
+from .parse import NO_READING, api_root, normalize_userstats_body
 from .state import UserStrikeState
 from .strike import evaluate_strike
-from .webif import CurlFetcher, OK
+from .webif import CurlFetcher, OK, fetch_userstats
 
 
 class CycleUserResult(object):
@@ -60,7 +60,7 @@ def run_cycle(config, store, fetcher=None, evaluated_at=None, dry_run=False,
               notifier=None):
     fetcher = fetcher or CurlFetcher(config.base_url(), auth=config.auth(),
                                      timeout_s=config.request_timeout_s)
-    fetch = fetcher.get("/oscamapi.json?part=userstats")
+    fetch = fetch_userstats(fetcher, prefer_ncam=is_ncam(config.base_path))
     if fetch.status == OK:
         monitored_users = normalize_userstats_body(fetch.body)
         if _needs_userconfig_retry(fetch.body, monitored_users):
@@ -301,7 +301,7 @@ def _needs_userconfig_retry(body, users):
 def _raw_entries(data):
     if not isinstance(data, dict):
         return []
-    oscam = data.get("oscam", data)
+    oscam = api_root(data)
     if not isinstance(oscam, dict):
         return []
     candidates = []
